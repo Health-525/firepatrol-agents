@@ -51,7 +51,7 @@ class AgentBrain:
 
     async def run(self, task: str, context: str, max_tool_rounds: int = 2,
                   max_tokens: int = 300, temperature: float = 0.3,
-                  timeout: float = 30.0) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+                  timeout: float = 12.0) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """返回 (最终文本 | None, 工具调用轨迹)。"""
         tool_note = ("你可以调用以下只读工具核实数据后再作答(最多 "
                      f"{max_tool_rounds} 轮): {', '.join(self.tools)}。不需要就不用调。") if self.tools else ""

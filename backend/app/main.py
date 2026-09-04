@@ -17,6 +17,7 @@ from .agentkit.llm import SAFETY_RULE, glm_chat, llm_status
 from .domain import scenarios
 from .domain.store import BOARD
 from .rules import knowledge
+from .rules import terrain
 from .rules import tools as R
 from .services.mission import SERVICE
 
@@ -37,6 +38,12 @@ class ApprovalDecision(BaseModel):
     decision: str  # approve | reject | adjust
     feedback: str = ""
     people_status: str | None = None
+
+
+@app.get("/api/terrain")
+async def terrain_endpoint():
+    """三维地形模型: 紫金山 SRTM 高程重采样为演示场景网格(100x70, 20m/格)。"""
+    return terrain.terrain_model()
 
 
 @app.get("/api/llm-status")
@@ -137,7 +144,6 @@ async def create_mission(payload: MissionCreate):
     if payload.scenario not in scenarios.SCENARIOS:
         raise HTTPException(400, f"未知场景 {payload.scenario}, 可选: {list(scenarios.SCENARIOS)}")
     task_id = await SERVICE.start(payload.scenario, payload.image_name)
-    await asyncio.sleep(0.2)
     return {"task_id": task_id, "snapshot": BOARD.snapshot(task_id)}
 
 
@@ -163,10 +169,10 @@ async def approve(task_id: str, payload: ApprovalDecision):
         BOARD.require(task_id)
     except KeyError:
         raise HTTPException(404, "mission not found")
-    if BOARD.require(task_id).get("phase") != "awaiting_approval":
-        raise HTTPException(409, f"当前阶段 {BOARD.require(task_id)['phase']} 不可审批")
-    await SERVICE.approve(task_id, payload.decision, payload.feedback, payload.people_status)
-    await asyncio.sleep(0.2)
+    try:
+        await SERVICE.approve(task_id, payload.decision, payload.feedback, payload.people_status)
+    except ValueError as error:
+        raise HTTPException(409, str(error))
     return {"task_id": task_id, "snapshot": BOARD.snapshot(task_id)}
 
 
@@ -179,6 +185,7 @@ async def mission_events(task_id: str, last_seq: int = 0):
 
     async def stream():
         seq = last_seq
+        last_rev: int | None = None
         keepalive = 0.0
         while True:
             mission = BOARD.require(task_id)
@@ -187,18 +194,24 @@ async def mission_events(task_id: str, last_seq: int = 0):
                 seq = message["seq"]
                 yield f"event: agent_message\ndata: {json.dumps(message, ensure_ascii=False)}\n\n"
             snapshot = BOARD.snapshot(task_id)
-            yield f"event: snapshot\ndata: {json.dumps({'phase': snapshot['phase'], 'rev': snapshot['rev'], 'round_index': len(snapshot['rounds'])}, ensure_ascii=False)}\n\n"
+            # 快照事件仅在 rev 变化时发送(空闲连接不再每 0.4s 重复推送)
+            if snapshot["rev"] != last_rev:
+                last_rev = snapshot["rev"]
+                payload = json.dumps({"phase": snapshot["phase"], "rev": snapshot["rev"],
+                                      "round_index": len(snapshot["rounds"])}, ensure_ascii=False)
+                yield f"event: snapshot\ndata: {payload}\n\n"
             if fresh:
                 keepalive = 0.0
+                await asyncio.sleep(0.4)  # 活跃期高频跟进
             else:
-                keepalive += 0.4
+                keepalive += 1.0
                 if keepalive > 15:
                     yield ": keepalive\n\n"
                     keepalive = 0.0
+                await asyncio.sleep(1.0)  # 空闲期降频(等待审批/长仿真时)
             if snapshot["phase"] in {"completed", "rejected", "error"} and not fresh:
                 yield "event: done\ndata: {}\n\n"
                 return
-            await asyncio.sleep(0.4)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

@@ -83,6 +83,12 @@ npm run dev      # http://localhost:5173
 
 Swagger: `http://localhost:8000/docs`
 
+> **常见问题**
+> - 端口被占(`errno 10048`): 多半是之前遗留的 uvicorn 进程。`netstat -ano | findstr :8000` 找到 PID 后在任务管理器结束,或直接换端口 `--port 8001`。
+> - 改了 `configs/simulation.json` 不生效: 仿真配置启动时缓存, 需重启后端。
+> - 依赖已按验证环境锁定版本(`requirements.txt`), 升级包后请跑 `pytest tests/ -v` 回归。
+> - 知识库启动日志若出现 `PDF 加载失败`, 说明缺 `pypdf`, 论文内容会被跳过。
+
 ## 演示场景(内置)
 
 | 场景 | 看点 |

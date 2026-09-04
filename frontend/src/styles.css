@@ -168,6 +168,20 @@ button.danger { border-color: #7f3b2c; color: #f2b8a5; }
 .timeline { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .tl-svg { width: 100%; display: block; max-height: 165px; }
 
+/* ============ 三维地形 ============ */
+.terrain-wrap { position: relative; }
+.terrain3d { position: absolute; inset: 0; }
+.terrain3d canvas { display: block; }
+.terrain-src {
+  position: absolute; left: 10px; bottom: 8px; font-size: 10px; color: rgba(143, 163, 154, 0.8);
+  background: rgba(8, 18, 14, 0.72); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px;
+  font-family: var(--mono); pointer-events: none;
+}
+.view-toggle { margin-left: auto; display: flex; gap: 4px; }
+.view-toggle button { padding: 3px 10px; font-size: 11px; border-radius: 5px; }
+.view-toggle button.on { border-color: var(--ember); color: #ffd9a0; background: #2a1f0e; }
+.fire-stat + .view-toggle { margin-left: 0; }
+
 /* ============ 机群 ============ */
 .fleet-panel, .agent-panel, .approval-card, .report-card, .chat-panel {
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; flex: 0 0 auto;

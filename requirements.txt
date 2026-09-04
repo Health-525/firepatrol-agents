@@ -1,5 +1,11 @@
-fastapi
-uvicorn[standard]
-pydantic
-langgraph>=0.2
-langchain-core>=0.3
+# 按已验证环境锁定版本(Windows / Python 3.11); 升级后请跑 pytest 回归
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.5
+langgraph==1.2.11
+langchain-core==1.6.1
+# 直接依赖显式声明(此前靠传递依赖侥幸安装)
+httpx==0.28.1
+pypdf==6.16.2
+# 测试
+pytest==9.1.1

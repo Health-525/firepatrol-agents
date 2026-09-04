@@ -30,6 +30,7 @@ export interface Fire {
   total_flp: number
   growth_flp_per_hour: number
   wind_speed: number
+  wind_direction_deg?: number
   wind_band: number
   wind_band_label: string
   intensity_level: number
@@ -108,6 +109,7 @@ export interface AgentProfile {
 export interface Scene {
   scene_id: string
   name: string
+  wind_direction_deg?: number
   base: { id: string; name: string; x: number; y: number }
   forward_supply_point: { id: string; name: string; x: number; y: number }
   water_sources: Array<{ id: string; name: string; x: number; y: number }>

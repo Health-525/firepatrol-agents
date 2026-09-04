@@ -44,12 +44,13 @@ def save_json(rel: str, data: Any) -> None:
 # ---------------------------------------------------------------- 风档 / 坡度 / 燃料
 
 def resolve_wind_band(wind_speed: float) -> Dict[str, Any]:
-    for band in sim_config()["wind_bands"]:
+    for band_no, band in enumerate(sim_config()["wind_bands"]):
         if wind_speed < band["max_mps"]:
-            return {"band": sim_config()["wind_bands"].index(band), "label": band["label"],
+            return {"band": band_no, "label": band["label"],
                     "k_wind": band["k_wind"], "weather_efficiency": band["weather_efficiency"], "wind_speed": wind_speed}
-    return {"band": len(sim_config()["wind_bands"]), "label": ">8 m/s",
-            "k_wind": sim_config()["k_wind_over"], "weather_efficiency": sim_config()["weather_efficiency_over"],
+    over = sim_config()
+    return {"band": len(over["wind_bands"]), "label": ">8 m/s",
+            "k_wind": over["k_wind_over"], "weather_efficiency": over["weather_efficiency_over"],
             "wind_speed": wind_speed}
 
 

@@ -74,23 +74,16 @@ def _route_round(state: MissionState) -> str:
 
 
 def build_mission_graph():
-    commander = CommanderAgent()
-    recon = ReconAgent()
-    suppression = SuppressionAgent()
-    support = SupportAgent()
-    simulator = SimulatorAgent()
-    approver = ApproverAgent()
-
     graph = StateGraph(MissionState)
-    graph.add_node("commander_intake", commander.handle)
-    graph.add_node("recon", recon.handle)
-    graph.add_node("suppression", suppression.handle)
-    graph.add_node("support", support.handle)
-    graph.add_node("simulator", simulator.evaluate)
-    graph.add_node("approver", approver.prepare)
-    graph.add_node("commander_decide", commander.decide)
-    graph.add_node("execute_round", simulator.execute_round)
-    graph.add_node("report", approver.report)
+    graph.add_node("commander_intake", COMMANDER.handle)
+    graph.add_node("recon", RECON.handle)
+    graph.add_node("suppression", SUPPRESSION.handle)
+    graph.add_node("support", SUPPORT.handle)
+    graph.add_node("simulator", SIMULATOR.evaluate)
+    graph.add_node("approver", APPROVER.prepare)
+    graph.add_node("commander_decide", COMMANDER.decide)
+    graph.add_node("execute_round", SIMULATOR.execute_round)
+    graph.add_node("report", APPROVER.report)
 
     graph.add_edge(START, "commander_intake")
     graph.add_edge("commander_intake", "recon")
@@ -108,5 +101,11 @@ def build_mission_graph():
     return graph.compile(checkpointer=MemorySaver())
 
 
-# 全局 6 Agent 实例(供 API 暴露协作档案)
-AGENTS = [CommanderAgent(), ReconAgent(), SuppressionAgent(), SupportAgent(), SimulatorAgent(), ApproverAgent()]
+# 全局 6 Agent 实例: 任务图与 API 协作档案共用(Agent 无内部状态, 全部经 task_id 读写黑板)
+COMMANDER = CommanderAgent()
+RECON = ReconAgent()
+SUPPRESSION = SuppressionAgent()
+SUPPORT = SupportAgent()
+SIMULATOR = SimulatorAgent()
+APPROVER = ApproverAgent()
+AGENTS = [COMMANDER, RECON, SUPPRESSION, SUPPORT, SIMULATOR, APPROVER]

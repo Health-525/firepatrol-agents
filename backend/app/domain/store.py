@@ -1,20 +1,25 @@
-"""黑板 / 任务存储: 共享状态 + Agent 消息流 + 轮次记录, 是前后端与多 Agent 的唯一事实源。"""
+"""黑板 / 任务存储: 共享状态 + Agent 消息流 + 轮次记录, 是前后端与多 Agent 的唯一事实源。
+
+并发说明: 本类全部方法为同步函数且无 await 让出点, 在单事件循环(uvicorn 单 worker)内天然原子;
+跨 worker 部署需换外部存储(Redis/DB)并引入真正的锁。
+"""
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 from ..domain.models import (AgentMessage, FireState, MissionPlan, MissionReport, RoundRecord, UAVState)
 
+MAX_MISSIONS = 50  # 黑板保留的任务数上限(超限淘汰最早的已结束任务, 防内存无界)
+
 
 class Blackboard:
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
         self.missions: Dict[str, Dict[str, Any]] = {}
 
     def new_mission(self, scene_id: str, image_name: str, scenario: str) -> str:
+        self._evict_finished()
         task_id = f"task-{uuid.uuid4().hex[:8]}"
         self.missions[task_id] = {
             "task_id": task_id,
@@ -38,6 +43,16 @@ class Blackboard:
             "rev": 0,
         }
         return task_id
+
+    def _evict_finished(self) -> None:
+        """超上限时淘汰最早的已结束任务; 全部在进行中则不淘汰(宁多勿丢)。"""
+        overflow = len(self.missions) - MAX_MISSIONS + 1
+        if overflow <= 0:
+            return
+        finished = sorted((m for m in self.missions.values() if m["phase"] in {"completed", "rejected", "error"}),
+                          key=lambda m: m["created_at"])
+        for mission in finished[:overflow]:
+            del self.missions[mission["task_id"]]
 
     def get(self, task_id: str) -> Optional[Dict[str, Any]]:
         return self.missions.get(task_id)

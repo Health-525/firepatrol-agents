@@ -26,7 +26,12 @@ class MissionService:
     # ---- 审批: resume 中断的图 ----
     async def approve(self, task_id: str, decision: str, feedback: str = "",
                       people_status: Optional[str] = None) -> None:
-        BOARD.require(task_id)
+        mission = BOARD.require(task_id)
+        # 同步 CAS: 检查并立刻离开待审批态, 阻止并发重复审批穿过检查(单事件循环内无让出点)
+        if mission.get("phase") != "awaiting_approval":
+            raise ValueError(f"当前阶段 {mission['phase']} 不可审批")
+        mission["phase"] = "analyzing"
+        mission["rev"] += 1
         resume = Command(resume={"decision": decision, "feedback": feedback, "people_status": people_status})
         await self._launch(task_id, resume)
 

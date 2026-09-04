@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from typing import Any, Dict, List
 
 from ..agentkit.base import BaseAgent
@@ -276,7 +277,7 @@ class SimulatorAgent(BaseAgent):
         if shift and round_index == shift["round"]:
             trigger = {"type": "wind_band_change", "detail": f"风速 {fire['wind_speed']} m/s 进入 {fire['wind_band_label']}",
                        "rule": "风速进入更高档位 → 强制重规划"}
-        elif before > 0 and (fire["total_flp"] - result["after_flp"]) / max(before, 1) > R.sim_config()["triggers"]["flp_growth_ratio"]:
+        elif before > 0 and fire["total_flp"] > before * (1 + R.sim_config()["triggers"]["flp_growth_ratio"]):
             trigger = {"type": "flp_growth", "detail": f"火情负荷上升超过 20%", "rule": "FLP↑>20% → 强制重规划"}
 
         record = {
@@ -284,10 +285,11 @@ class SimulatorAgent(BaseAgent):
             "before_flp": before, "growth_flp": result["growth_flp"],
             "suppression_flp": round(suppression_flp, 2), "after_flp": fire["total_flp"],
             "wind_speed": wind_speed,
-            "uavs": [{"uav_id": u["uav_id"], "status": u["status"], "position": u["position"], "soc": u["soc"],
+            "uavs": [{"uav_id": u["uav_id"], "status": u["status"], "position": dict(u["position"]), "soc": u["soc"],
                       "agent_remaining": u["agent_remaining"], "sorties": u["sorties"], "swaps": u["swaps"],
                       "refills": u["refills"]} for u in fleet],
-            "inventory": dict(inventory), "events": round_events,
+            # 深拷贝: forward_supply_points 等嵌套结构会被后续轮次原地修改, 浅拷贝会污染历史
+            "inventory": copy.deepcopy(inventory), "events": round_events,
         }
         rounds = state.get("rounds", []) + [record]
         BOARD.update(task_id, fire=fire, fleet=fleet, inventory=inventory, rounds=rounds, round_index=round_index)

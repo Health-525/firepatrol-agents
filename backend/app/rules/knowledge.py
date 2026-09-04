@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List
@@ -32,7 +33,9 @@ def _load_pdf(path: Path) -> str:
     try:
         from pypdf import PdfReader
         return "\n".join((page.extract_text() or "") for page in PdfReader(str(path)).pages)
-    except Exception:
+    except Exception as error:  # noqa: BLE001
+        # 静默失败会让论文内容无声地从知识库消失, 必须显式告警(缺 pypdf 时执行 pip install pypdf)
+        print(f"[knowledge] PDF 加载失败, 知识库将缺少论文内容({path.name}): {error}", file=sys.stderr)
         return ""
 
 

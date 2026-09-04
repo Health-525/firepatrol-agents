@@ -1,6 +1,7 @@
 """⑥ 交互审批 Agent —— 面向用户: 方案解释(数字来源标注)、审批中断、报告归档。"""
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict
 
 from langgraph.types import interrupt
@@ -64,6 +65,21 @@ class ApproverAgent(BaseAgent):
                      f"方案已生成,等待审批。最优 {best['candidate_id']}:灭火机 {len(best.get('suppression_uavs', []))} 架 + "
                      f"{best.get('module')};{feasibility_label};预计 {best.get('time_interval', '无法给出')}。"
                      f"生成方案 ≠ 执行,确认后才会锁定资源。", request)
+            # 审批建议异步生成: 审批卡先到用户手上, GLM 建议算完再补发, 不阻塞审批门
+            asyncio.create_task(self._advice(task_id, request, best, support, feasibility_label))
+
+        decision = interrupt(request)  # ---- LangGraph 审批中断, 等待 human ----
+
+        BOARD.update(task_id, phase="analyzing", approval_request=None)  # 立即离开待审批态, 避免读到旧请求
+        self.say(task_id, "APPROVAL_DECISION", "commander",
+                 f"用户决策:{decision.get('decision')}" + (f"(意见:{decision.get('feedback')})" if decision.get("feedback") else ""),
+                 decision)
+        return {"approval": decision}
+
+    async def _advice(self, task_id: str, request: Dict[str, Any], best: Dict[str, Any],
+                      support: Dict[str, Any], feasibility_label: str | None) -> None:
+        """后台生成审批建议; 任何失败静默回落(无建议不影响审批)。"""
+        try:
             numbers = "; ".join(f"{k['name']}={k['value']}" for k in request["key_numbers"])
             advice, trace = await self.think(
                 "给出审批建议: 推荐批准/调整/拒绝中的哪个, 最关键的理由与风险提示(数字必须来自下方数据)",
@@ -73,14 +89,8 @@ class ApproverAgent(BaseAgent):
                 f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}", max_tokens=260)
             if advice:
                 self.say_llm(task_id, "APPROVAL_REQ", "human", f"审批建议:{advice}", trace)
-
-        decision = interrupt(request)  # ---- LangGraph 审批中断, 等待 human ----
-
-        BOARD.update(task_id, phase="analyzing", approval_request=None)  # 立即离开待审批态, 避免读到旧请求
-        self.say(task_id, "APPROVAL_DECISION", "commander",
-                 f"用户决策:{decision.get('decision')}" + (f"(意见:{decision.get('feedback')})" if decision.get("feedback") else ""),
-                 decision)
-        return {"approval": decision}
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------ 报告归档
 
@@ -92,7 +102,9 @@ class ApproverAgent(BaseAgent):
         last = rounds[-1] if rounds else {}
         flp0 = first.get("before_flp", 0)
         flp1 = last.get("after_flp", 0)
-        material = sum(u.get("sorties", 0) for u in fleet if u["subgroup"] == "suppression") * R.sim_config()["spray"]["water_20l"]["quantity"]
+        # 物资消耗按实际锁定的方案药剂口径统计(co2 方案不能按水剂 20L 计)
+        module = ((state.get("plan") or {}).get("candidate") or {}).get("module") or "water_20l"
+        material = sum(u.get("sorties", 0) for u in fleet if u["subgroup"] == "suppression") * R.sim_config()["spray"][module]["quantity"]
         conclusion = state.get("conclusion") or ("任务完成。" if flp1 <= 0.01 else "任务终止。")
         report = {
             "report_id": f"RPT-{task_id[-6:].upper()}", "task_id": task_id, "conclusion": conclusion,

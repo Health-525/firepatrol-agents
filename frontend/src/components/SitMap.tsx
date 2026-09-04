@@ -1,17 +1,20 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Scene, Snapshot, UAV } from '../types'
 import { SUBGROUP_META } from '../types'
+import Terrain3D, { type TerrainModel } from './Terrain3D'
 
-interface Props { scene: Scene | null; snapshot: Snapshot | null }
+interface Props { scene: Scene | null; snapshot: Snapshot | null; terrain: TerrainModel | null }
 
 const W = 2000, H = 1400 // 世界坐标(米)
 
-// 无人机动画位置(uav_id -> 当前渲染坐标)
+// 无人机动画位置(uav_id -> 当前渲染坐标); 换任务时清空, 避免从上一个任务的残位飞过来
 const animPos: Record<string, { x: number; y: number }> = {}
+let animTaskId: string | null = null
 
-export default function SitMap({ scene, snapshot }: Props) {
+export default function SitMap({ scene, snapshot, terrain }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const stateRef = useRef<Props>({ scene, snapshot })
+  const [mode, setMode] = useState<'3d' | '2d'>('3d')
+  const stateRef = useRef<{ scene: Scene | null; snapshot: Snapshot | null }>({ scene, snapshot })
   stateRef.current = { scene, snapshot }
 
   useEffect(() => {
@@ -39,14 +42,25 @@ export default function SitMap({ scene, snapshot }: Props) {
   const fire = snapshot?.fire
   return (
     <div className="sitmap">
-      <div className="panel-title">林区态势 · 100 m² 网格 + FLP 热度
+      <div className="panel-title">林区态势{mode === '3d' ? ' · 三维地形模型' : ' · 100 m² 网格 + FLP 热度'}
         {fire && (
           <span className="fire-stat">
             B<sub>总</sub> = <b>{fire.total_flp}</b> FLP · 风 {fire.wind_speed} m/s({fire.wind_band_label}) · 人员 {fire.people_status}
           </span>
         )}
+        <span className="view-toggle">
+          <button className={mode === '3d' ? 'on' : ''} onClick={() => setMode('3d')}>🏔 模型</button>
+          <button className={mode === '2d' ? 'on' : ''} onClick={() => setMode('2d')}>🗺 平面</button>
+        </span>
       </div>
-      <div className="canvas-wrap"><canvas ref={canvasRef} /></div>
+      {mode === '3d' ? (
+        <div className="canvas-wrap terrain-wrap">
+          <Terrain3D scene={scene} snapshot={snapshot} terrain={terrain} />
+          {terrain && <span className="terrain-src">地形: {terrain.source} · 高程 {terrain.min_elev}–{terrain.max_elev} m · 垂直夸张 ×{terrain.exaggeration} · 拖拽旋转/滚轮缩放</span>}
+        </div>
+      ) : (
+        <div className="canvas-wrap"><canvas ref={canvasRef} /></div>
+      )}
       <div className="legend">
         <span><i className="lg" style={{ background: SUBGROUP_META.reconnaissance.color }} /> 侦察 R</span>
         <span><i className="lg" style={{ background: SUBGROUP_META.suppression.color }} /> 灭火 E</span>
@@ -92,9 +106,9 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   for (let x = 0; x < W; x += 200) ctx.fillText(String(x), px(x) + 3, py(0) + 12)
   for (let y = 0; y < H; y += 200) ctx.fillText(String(y), px(0) + 4, py(y) + 11)
 
-  // 风场矢量阵列(无任务时指向场景盛行风向 西北→东南)
+  // 风场矢量阵列(指向场景盛行风向, 角度取自 scene.wind_direction_deg)
   const windActive = !!snap?.fire
-  const windDeg = windActive ? 315 : 315
+  const windDeg = sc?.wind_direction_deg ?? 315
   const wdx = Math.cos((windDeg * Math.PI) / 180), wdy = Math.sin((windDeg * Math.PI) / 180)
   ctx.strokeStyle = 'rgba(103, 232, 249, 0.22)'
   ctx.lineWidth = 1.2
@@ -170,6 +184,10 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
 
   // 无人机(位置插值动画)
   const fleet: UAV[] = snap?.fleet ?? []
+  if (snap && snap.task_id !== animTaskId) {
+    animTaskId = snap.task_id
+    for (const key of Object.keys(animPos)) delete animPos[key]
+  }
   for (const uav of fleet) {
     const target = { x: uav.position.x, y: uav.position.y }
     const cur = animPos[uav.uav_id]
@@ -200,7 +218,7 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   const fire0 = snap?.fire
   if (fire0) {
     const cx = vw - 60, cy = 46
-    const rad = ((fire0.wind_speed != null ? 315 : 315) * Math.PI) / 180 // 场景默认西北风
+    const rad = ((fire0.wind_direction_deg ?? sc?.wind_direction_deg ?? 315) * Math.PI) / 180
     const dx = Math.cos(rad), dy = Math.sin(rad)
     ctx.strokeStyle = '#67e8f9'; ctx.lineWidth = 2
     ctx.beginPath(); ctx.moveTo(cx - dx * 16, cy - dy * 16); ctx.lineTo(cx + dx * 16, cy + dy * 16); ctx.stroke()
