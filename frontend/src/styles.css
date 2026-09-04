@@ -161,6 +161,20 @@ button.danger { border-color: #7f3b2c; color: #f2b8a5; }
   background: rgba(8, 18, 14, 0.72); border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px;
   font-family: var(--mono); pointer-events: none;
 }
+.elev-legend {
+  position: absolute; right: 10px; top: 10px; z-index: 2; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font: 600 10px var(--mono); color: #cfe0d6;
+  background: rgba(8, 18, 14, 0.72); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+}
+.elev-legend .elev-bar {
+  width: 12px; height: 96px; border-radius: 3px; border: 1px solid #0008;
+  background: linear-gradient(180deg, #8a8172, #6b6247 22%, #3b5741 52%, #22402f);
+}
+.elev-legend span {
+  font-size: 9px; font-weight: 400; color: rgba(143, 163, 154, 0.85);
+  max-width: 68px; text-align: center; line-height: 1.35; margin-top: 2px;
+}
 .view-toggle { margin-left: auto; display: flex; gap: 4px; }
 .view-toggle button { padding: 3px 10px; font-size: 11px; border-radius: 5px; }
 .view-toggle button.on { border-color: var(--ember); color: #ffd9a0; background: #2a1f0e; }

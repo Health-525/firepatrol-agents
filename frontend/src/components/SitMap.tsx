@@ -87,6 +87,43 @@ function buildDecor(scene: Scene, terrain: TerrainModel | null): Decor {
   return { trees, lakes, stream }
 }
 
+// ---------- 真实高程等高线(marching squares, 40m 间距, 按地形只算一次) ----------
+interface ContourLayer { key: string; normal: Path2D; index: Path2D; peak: { x: number; y: number; v: number } }
+let contourLayer: ContourLayer | null = null
+
+function buildContours(ter: TerrainModel): ContourLayer {
+  const normal = new Path2D()
+  const index = new Path2D()
+  const step = 40
+  for (let level = Math.ceil(ter.min_elev / step) * step; level <= ter.max_elev; level += step) {
+    const path = level % 120 === 0 ? index : normal
+    for (let gy = 0; gy < ter.ny - 1; gy++) {
+      for (let gx = 0; gx < ter.nx - 1; gx++) {
+        const x0 = gx / (ter.nx - 1) * ter.scene_w, y0 = gy / (ter.ny - 1) * ter.scene_h
+        const x1 = (gx + 1) / (ter.nx - 1) * ter.scene_w, y1 = (gy + 1) / (ter.ny - 1) * ter.scene_h
+        const corners: Array<[number, number, number]> = [
+          [x0, y0, ter.elevations[gy][gx]], [x1, y0, ter.elevations[gy][gx + 1]],
+          [x1, y1, ter.elevations[gy + 1][gx + 1]], [x0, y1, ter.elevations[gy + 1][gx]]]
+        for (let e = 0; e < 4; e++) {
+          const e2 = (e + 1) % 4
+          const a = corners[e], b = corners[e2]
+          if ((a[2] < level) !== (b[2] < level)) {
+            const t = (level - a[2]) / (b[2] - a[2] || 1)
+            const cx = a[0] + (b[0] - a[0]) * t, cy = a[1] + (b[1] - a[1]) * t
+            path.moveTo(cx, cy)
+            path.lineTo(cx + 0.01, cy + 0.01)
+          }
+        }
+      }
+    }
+  }
+  let v = -Infinity, pkx = 0, pky = 0
+  for (let gy = 0; gy < ter.ny; gy++) for (let gx = 0; gx < ter.nx; gx++) {
+    if (ter.elevations[gy][gx] > v) { v = ter.elevations[gy][gx]; pkx = gx / (ter.nx - 1) * ter.scene_w; pky = gy / (ter.ny - 1) * ter.scene_h }
+  }
+  return { key: `${ter.source}:${ter.min_elev}-${ter.max_elev}`, normal, index, peak: { x: pkx, y: pky, v } }
+}
+
 // ---------- 图元 ----------
 function pine(ctx: CanvasRenderingContext2D, x: number, y: number, s: number, color: string) {
   ctx.fillStyle = color
@@ -145,7 +182,7 @@ function fireTruck(ctx: CanvasRenderingContext2D, x: number, y: number, ang: num
 
 export default function SitMap({ scene, snapshot, terrain }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [mode, setMode] = useState<'2d' | '3d'>('2d')
+  const [mode, setMode] = useState<'2d' | '3d'>('3d')
   const stateRef = useRef<{ scene: Scene | null; snapshot: Snapshot | null; terrain: TerrainModel | null }>({ scene, snapshot, terrain })
   stateRef.current = { scene, snapshot, terrain }
 
@@ -188,7 +225,17 @@ export default function SitMap({ scene, snapshot, terrain }: Props) {
       {mode === '3d' ? (
         <div className="canvas-wrap terrain-wrap">
           <Terrain3D scene={scene} snapshot={snapshot} terrain={terrain} />
-          {terrain && <span className="terrain-src">紫金山实测高程 · 拖拽旋转 / 滚轮缩放</span>}
+          {terrain && (
+            <>
+              <span className="terrain-src">紫金山实测高程 · 拖拽旋转 / 滚轮缩放</span>
+              <div className="elev-legend">
+                <b>{Math.round(terrain.max_elev)}</b>
+                <div className="elev-bar" />
+                <b>{Math.round(terrain.min_elev)}</b>
+                <span>海拔 m<br />竖向夸张 ×{terrain.exaggeration}</span>
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <div className="canvas-wrap"><canvas ref={canvasRef} /></div>
@@ -233,15 +280,26 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
     }
   }
 
-  // ---- 等高线(地形脊线示意) ----
-  ctx.strokeStyle = 'rgba(94, 131, 113, 0.12)'
-  ctx.lineWidth = 1.2
-  for (let i = 0; i < 7; i++) {
-    ctx.beginPath()
-    const baseY = 140 + i * 170
-    ctx.moveTo(px(60 + i * 90), py(baseY))
-    ctx.bezierCurveTo(px(500 + i * 40), py(baseY - 130), px(1100 - i * 30), py(baseY + 120), px(1900 - i * 60), py(baseY - 40))
-    ctx.stroke()
+  // ---- 等高线(真实高程 marching squares, 40m 细线 / 120m 计曲线) + 主峰标注 ----
+  if (ter) {
+    const key = `${ter.source}:${ter.min_elev}-${ter.max_elev}`
+    if (!contourLayer || contourLayer.key !== key) contourLayer = buildContours(ter)
+    ctx.save()
+    ctx.translate(ox, oy)
+    ctx.scale(scale, scale)
+    ctx.strokeStyle = 'rgba(94, 131, 113, 0.16)'
+    ctx.lineWidth = 1.2 / scale
+    ctx.stroke(contourLayer.normal)
+    ctx.strokeStyle = 'rgba(126, 165, 144, 0.28)'
+    ctx.lineWidth = 2 / scale
+    ctx.stroke(contourLayer.index)
+    ctx.restore()
+    const pk = contourLayer.peak
+    ctx.fillStyle = '#ffd9a0'
+    ctx.font = 'bold 10px "Microsoft YaHei UI", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(`▲ 主峰 ${Math.round(pk.v)}m`, px(pk.x), py(pk.y) - 6)
+    ctx.textAlign = 'left'
   }
 
   // ---- 装饰(森林/湖泊/溪流) ----

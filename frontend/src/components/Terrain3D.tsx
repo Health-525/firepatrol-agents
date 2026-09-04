@@ -543,17 +543,17 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
     const colors: number[] = []
     const span = terrain.max_elev - terrain.min_elev || 1
     const height = (r: number, c: number) => terrain.elevations[Math.max(0, Math.min(ny - 1, r))]?.[Math.max(0, Math.min(nx - 1, c))] ?? terrain.min_elev
+    // 网格第 gy 行 ↔ 场景 y = gy*cellH(与 elev()/2D 平面图同向), 保证对象贴地高程一致
     const elevArr: number[] = []
     for (let i = 0; i < pos.count; i++) {
       const gx = i % nx, gy = Math.floor(i / nx)
-      const row = ny - 1 - gy
-      const h = height(row, gx)
+      const h = height(gy, gx)
       elevArr.push(h)
       pos.setY(i, h * EX)
     }
     for (let i = 0; i < pos.count; i++) {
       const gx = i % nx, gy = Math.floor(i / nx)
-      const row = ny - 1 - gy
+      const row = gy
       const h = elevArr[i]
       const t = (h - terrain.min_elev) / span
       const c = t < 0.45 ? COL_VALLEY.clone().lerp(COL_MID, t / 0.45)
@@ -578,7 +578,7 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
     const cellW = scene_w / (nx - 1), cellH = scene_h / (ny - 1)
     const gridX = (c: number) => c * cellW - scene_w / 2
     const gridZ = (r: number) => r * cellH - scene_h / 2
-    const hAt = (r: number, c: number) => elevArr[(ny - 1 - r) * nx + c] ?? terrain.min_elev
+    const hAt = (r: number, c: number) => elevArr[r * nx + c] ?? terrain.min_elev
     const yAt = (r: number, c: number) => hAt(r, c) * EX
     for (let level = Math.ceil(terrain.min_elev / 40) * 40; level <= terrain.max_elev; level += 40) {
       const pts: THREE.Vector3[] = []
@@ -610,6 +610,27 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
       new THREE.MeshBasicMaterial({ color: '#0c1512', side: THREE.BackSide }))
     skirt.position.y = terrain.min_elev * EX - 110
     core.world.add(skirt)
+
+    // 主峰标注: 全场最高点测旗 + 高程牌
+    let peakV = -Infinity, peakR = 0, peakC = 0
+    for (let r = 0; r < ny; r++) for (let c = 0; c < nx; c++) {
+      const v = terrain.elevations[r][c]
+      if (v > peakV) { peakV = v; peakR = r; peakC = c }
+    }
+    const peakSceneX = peakC / (nx - 1) * scene_w, peakSceneY = peakR / (ny - 1) * scene_h
+    const [pkx, pkz] = toWorld(terrain, peakSceneX, peakSceneY)
+    const pky = peakV * EX
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 46, 6),
+      new THREE.MeshStandardMaterial({ color: '#e8e2d2', roughness: 0.55 }))
+    pole.position.set(pkx, pky + 23, pkz)
+    core.world.add(pole)
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(26, 14),
+      new THREE.MeshBasicMaterial({ color: '#ffb347', side: THREE.DoubleSide }))
+    flag.position.set(pkx + 13.5, pky + 41, pkz)
+    core.world.add(flag)
+    const peakTag = textSprite(`主峰 ${Math.round(peakV)} m`, '#ffd9a0', 1)
+    peakTag.position.set(pkx, pky + 78, pkz)
+    core.world.add(peakTag)
 
     // 基地: 台座 + 发光环 + 标注
     const makeStation = (x: number, y: number, label: string, color: string, size: number) => {
