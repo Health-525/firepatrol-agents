@@ -1,12 +1,14 @@
 """③ 灭火调度 Agent —— 候选生成(1–4 架 E 子群组合)+ 硬约束过滤(与仿真评分解耦)。"""
 from __future__ import annotations
 
+import json
 from itertools import combinations
 from typing import Any, Dict, List
 
 from ..agentkit.base import BaseAgent
 from ..domain.store import BOARD
 from ..rules import tools as R
+from ..rules.knowledge import query_knowledge
 
 RETURN_SOC = R.RETURN_SOC
 
@@ -18,8 +20,10 @@ class SuppressionAgent(BaseAgent):
     subgroup = "suppression"
     color = "#ef4444"
     emoji = "🚒"
+    tools = {"query_knowledge": query_knowledge, "suppression_capability": R.suppression_capability,
+             "agent_kappa": R.agent_kappa}
 
-    def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         fire = state["fire"]
         fleet = state["fleet"]
@@ -48,16 +52,23 @@ class SuppressionAgent(BaseAgent):
                 "per_sortie_flp": cap["effective_flp"],
             })
         feasible_ids = [c["candidate_id"] for c in candidates if c["feasible"]]
+        veto_reasons = sorted({r for c in candidates for chk in c["checks"] for r in chk["reasons"]})
         BOARD.update(task_id, candidates=candidates)
         veto = ""
         if not feasible_ids:
-            worst = candidates[-1]["checks"] if candidates else []
-            veto = f"全部组合未过硬约束({'; '.join({r for chk in worst for r in chk['reasons']})})," \
+            veto = f"全部组合未过硬约束({'; '.join(veto_reasons)})," \
                    f"系统将输出资源缺口而不是虚假方案。"
         self.say(task_id, "PLAN_PROPOSAL", "commander",
                  f"候选方案生成完毕:药剂 {module}(kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP),"
                  f"枚举 {len(candidates)} 个组合,过硬约束 {len(feasible_ids)} 个:{', '.join(feasible_ids) or '无'}。{veto}",
                  {"candidates": candidates, "capability": cap})
+        analysis, trace = await self.think(
+            "解释候选方案设计: 药剂选择依据、组合从少到多的取舍逻辑、硬约束淘汰原因",
+            f"火型 {fire['fire_type']},药剂 {module},kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP;"
+            f"过硬约束组合: {feasible_ids or '无'};淘汰原因: {veto_reasons or '无'};"
+            f"硬约束明细: {json.dumps(candidates[-1]['checks'], ensure_ascii=False)[:400] if candidates else '[]'}")
+        if analysis:
+            self.say_llm(task_id, "PLAN_PROPOSAL", "commander", analysis, trace)
         return {"candidates": candidates, "module": module, "capability": cap}
 
     @staticmethod

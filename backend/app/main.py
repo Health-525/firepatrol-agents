@@ -33,6 +33,12 @@ class ChatQuestion(BaseModel):
     question: str
 
 
+class ApprovalDecision(BaseModel):
+    decision: str  # approve | reject | adjust
+    feedback: str = ""
+    people_status: str | None = None
+
+
 @app.get("/api/llm-status")
 async def llm_status_endpoint():
     return llm_status()

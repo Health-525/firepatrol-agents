@@ -6,9 +6,9 @@ from typing import Any, Dict
 from langgraph.types import interrupt
 
 from ..agentkit.base import BaseAgent
-from ..agentkit.llm import agent_analysis, glm_chat, llm_status, SAFETY_RULE
 from ..domain.store import BOARD
 from ..rules import tools as R
+from ..rules.knowledge import query_knowledge
 
 
 class ApproverAgent(BaseAgent):
@@ -18,6 +18,7 @@ class ApproverAgent(BaseAgent):
     subgroup = "system"
     color = "#ec4899"
     emoji = "📝"
+    tools = {"query_knowledge": query_knowledge, "score_plan": R.score_plan}
 
     async def prepare(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
@@ -64,17 +65,14 @@ class ApproverAgent(BaseAgent):
                      f"{best.get('module')};{feasibility_label};预计 {best.get('time_interval', '无法给出')}。"
                      f"生成方案 ≠ 执行,确认后才会锁定资源。", request)
             numbers = "; ".join(f"{k['name']}={k['value']}" for k in request["key_numbers"])
-            advice = await glm_chat(
-                f"{SAFETY_RULE}你是「交互审批」智能体, 职责: {self.role}。用不超过110字向指挥员给出审批建议: "
-                f"推荐批准/调整/拒绝中的哪个, 并说明最关键的理由与风险提示。",
+            advice, trace = await self.think(
+                "给出审批建议: 推荐批准/调整/拒绝中的哪个, 最关键的理由与风险提示(数字必须来自下方数据)",
                 f"最优方案 {best['candidate_id']}({','.join(best.get('suppression_uavs', []))},"
                 f"评分J={best.get('score', {}).get('score')},{best.get('time_interval', '无法给出')},"
                 f"{feasibility_label});支援分支 {support.get('branch')};关键数字: {numbers};"
-                f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}",
-                max_tokens=180)
+                f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}", max_tokens=260)
             if advice:
-                self.say(task_id, "APPROVAL_REQ", "human", f"💡 GLM 审批建议:{advice}",
-                         {"llm": llm_status()["model"], "grounded": "rules-engine"})
+                self.say_llm(task_id, "APPROVAL_REQ", "human", f"审批建议:{advice}", trace)
 
         decision = interrupt(request)  # ---- LangGraph 审批中断, 等待 human ----
 
@@ -110,11 +108,10 @@ class ApproverAgent(BaseAgent):
         self.say(task_id, "REPORT_READY", "human",
                  f"任务归档:{conclusion} 轮次 {len(rounds)},FLP {flp0}→{flp1},"
                  f"换电 {report['swaps']} 次、补水 {report['refills']} 次、重规划 {report['replans']} 次。", report)
-        closing = await agent_analysis(self.name, self.role,
-                                       f"结论: {conclusion}; 轮次 {len(rounds)}; FLP {flp0}→{flp1}; "
-                                       f"换电 {report['swaps']}, 补水 {report['refills']}, 重规划 {report['replans']}",
-                                       topic="任务报告 归档 结论 复盘", max_tokens=160)
+        closing, trace = await self.think(
+            "结案复盘: 任务结果评价、资源使用效率、下次可改进点(只引用给定数字)",
+            f"结论: {conclusion};轮次 {len(rounds)};FLP {flp0}→{flp1};换电 {report['swaps']},"
+            f"补水 {report['refills']},重规划 {report['replans']}", max_tokens=220)
         if closing:
-            self.say(task_id, "REPORT_READY", "human", f"💡 GLM 结案研判:{closing}",
-                     {"llm": llm_status()["model"]})
+            self.say_llm(task_id, "REPORT_READY", "human", f"结案研判:{closing}", trace)
         return {"report": report, "phase": final_phase}

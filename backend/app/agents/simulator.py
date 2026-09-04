@@ -5,9 +5,9 @@ import asyncio
 from typing import Any, Dict, List
 
 from ..agentkit.base import BaseAgent
-from ..agentkit.llm import agent_analysis, llm_status
 from ..domain.store import BOARD
 from ..rules import tools as R
+from ..rules.knowledge import query_knowledge
 
 RETURN_SOC = R.RETURN_SOC
 
@@ -19,6 +19,8 @@ class SimulatorAgent(BaseAgent):
     subgroup = "system"
     color = "#f59e0b"
     emoji = "⚖️"
+    tools = {"query_knowledge": query_knowledge, "net_capability": R.net_capability,
+             "simulate_round": R.simulate_round}
 
     # ------------------------------------------------ 评估: 为每个候选打分排名
 
@@ -78,14 +80,12 @@ class SimulatorAgent(BaseAgent):
             ranking_brief = "; ".join(f"{c['candidate_id']}(灭火机{len(c.get('suppression_uavs', []))}架,"
                                       f"J={c['score']['score']},{c['time_interval']},{c['feasibility']})" for c in ranked)
             best_id = best.get("candidate_id")
-            analysis = await agent_analysis(self.name, self.role,
-                                            f"B={fire['total_flp']} FLP,增长率 {fire['growth_flp_per_hour']} FLP/h,"
-                                            f"风 {fire['wind_speed']} m/s;候选排名(J 越小越优, 已按规则引擎评分确定): "
-                                            f"{ranking_brief};规则引擎判定最优={best_id}, 不可推翻该排序",
-                                            topic="调度评分 候选方案 最优 净处置能力")
+            analysis, trace = await self.think(
+                "解读候选排序: 为什么最优是它(时间/残余/耗电/物资/变更的权衡), 排序由规则引擎评分确定不可推翻",
+                f"B={fire['total_flp']} FLP,增长率 {fire['growth_flp_per_hour']} FLP/h,风 {fire['wind_speed']} m/s;"
+                f"候选(J 越小越优): {ranking_brief};规则引擎判定最优={best_id}")
             if analysis:
-                self.say(task_id, "SIM_RESULT", "commander", f"💡 GLM 研判:{analysis}",
-                         {"llm": llm_status()["model"], "grounded": "knowledge-base"})
+                self.say_llm(task_id, "SIM_RESULT", "commander", analysis, trace)
         return {"candidates": ranked, "best_candidate": best}
 
     @staticmethod
@@ -314,14 +314,12 @@ class SimulatorAgent(BaseAgent):
             BOARD.update(task_id, phase="replanning", replans=replans)
             self.say(task_id, "REPLAN_TRIGGER", "commander",
                      f"触发重规划:{trigger['detail']}({trigger['rule']})。指挥官请重新组织研判与方案生成。", trigger)
-            impact = await agent_analysis(self.name, self.role,
-                                          f"第{round_index}轮, 触发: {trigger['detail']}; 当前 B={fire['total_flp']} FLP,"
-                                          f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),"
-                                          f"本轮压制 {round(suppression_flp, 1)} FLP",
-                                          topic="重规划 风速档位 火情负荷 触发")
+            impact, trace = await self.think(
+                "分析突变影响: 触发事件对火势/药剂效率/方案的影响, 以及重规划应重点调整什么",
+                f"第{round_index}轮, 触发: {trigger['detail']};当前 B={fire['total_flp']} FLP,"
+                f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),本轮压制 {round(suppression_flp, 1)} FLP")
             if impact:
-                self.say(task_id, "REPLAN_TRIGGER", "commander", f"💡 GLM 研判:{impact}",
-                         {"llm": llm_status()["model"], "grounded": "knowledge-base"})
+                self.say_llm(task_id, "REPLAN_TRIGGER", "commander", impact, trace)
         elif round_index >= cfg["time"]["max_rounds"]:
             route, conclusion = "done", f"达到最大轮次({cfg['time']['max_rounds']}),剩余 FLP {fire['total_flp']}。"
         elif active and stall_rounds >= 4:

@@ -13,9 +13,9 @@ import httpx
 
 
 def _cfg() -> tuple[str, str, str]:
-    base = os.environ.get("FIREOPS_LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    base = os.environ.get("FIREOPS_LLM_BASE_URL", "https://open.bigmodel.cn/api/coding/paas/v4")
     key = os.environ.get("FIREOPS_LLM_API_KEY", "")
-    model = os.environ.get("FIREOPS_LLM_MODEL", "glm-4-flash")
+    model = os.environ.get("FIREOPS_LLM_MODEL", "glm-5.3-flash")
     return base, key, model
 
 
@@ -26,26 +26,37 @@ def llm_available() -> bool:
 def llm_status() -> dict:
     base, key, model = _cfg()
     return {"connected": bool(key), "model": model if key else None,
-            "provider": "zhipu-bigmodel" if key else "offline-deterministic", "base_url": base if key else None}
+            "provider": "zhipu-bigmodel-coding-plan" if key else "offline-deterministic", "base_url": base if key else None}
 
 
-async def glm_chat(system: str, user: str, max_tokens: int = 220, temperature: float = 0.3,
-                   timeout: float = 20.0) -> Optional[str]:
-    """调用 GLM, 返回文本; 失败返回 None(调用方回落确定性模板)。"""
-    base, key, model = _cfg()
+async def _post_chat(body: dict, timeout: float) -> dict | None:
+    """底层 HTTP 调用, 失败返回 None。"""
+    base, key, _ = _cfg()
     if not key:
         return None
-    body = json.dumps({"model": model, "messages": [
-        {"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": temperature, "max_tokens": max_tokens})
+    if os.environ.get("FIREOPS_LLM_THINKING", "disabled") == "disabled":
+        body.setdefault("thinking", {"type": "disabled"})  # 思考型模型(GLM-5.x)直出结论, 演示节奏更快
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(f"{base}/chat/completions", content=body.encode("utf-8"),
+            response = await client.post(f"{base}/chat/completions", content=json.dumps(body).encode("utf-8"),
                                          headers={"Content-Type": "application/json",
                                                   "Authorization": f"Bearer {key}"})
             response.raise_for_status()
-            payload = response.json()
-        text = payload["choices"][0]["message"]["content"].strip()
+            return response.json()
+    except Exception:
+        return None
+
+
+async def glm_chat(system: str, user: str, max_tokens: int = 300, temperature: float = 0.3,
+                   timeout: float = 25.0) -> Optional[str]:
+    """调用 GLM, 返回文本; 失败返回 None(调用方回落确定性模板)。"""
+    payload = await _post_chat({"model": _cfg()[2], "messages": [
+        {"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": temperature, "max_tokens": max_tokens}, timeout)
+    if not payload:
+        return None
+    try:
+        text = (payload["choices"][0]["message"].get("content") or "").strip()
         return text or None
     except Exception:
         return None

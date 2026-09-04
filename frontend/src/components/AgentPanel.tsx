@@ -50,6 +50,13 @@ export default function AgentPanel({ messages, agents }: Props) {
                 <span className="msg-seq">#{m.seq}</span>
               </div>
               <div className="msg-body">{m.content}</div>
+              {m.data && Array.isArray((m.data as any).tools) && (m.data as any).tools.length > 0 && (
+                <div className="tool-trace">
+                  {(m.data as any).tools.map((t: string, i: number) => (
+                    <span key={i} className="tool-chip">🔧 {t}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )
         })}

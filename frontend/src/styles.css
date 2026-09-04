@@ -168,6 +168,8 @@ ul.kv li.gap b { color: #f87171; }
 .chat-input input { flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; }
 .msg-llm { border-color: #7c3aed66; background: linear-gradient(135deg, #141024, var(--panel2)); }
 .llm-chip { font-size: 9px; color: #c4b5fd; border: 1px solid #7c3aed; border-radius: 4px; padding: 0 5px; }
+.tool-trace { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.tool-chip { font-size: 9.5px; color: #5eead4; border: 1px dashed #14b8a6aa; border-radius: 4px; padding: 1px 6px; }
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: #1c332b; border-radius: 4px; }

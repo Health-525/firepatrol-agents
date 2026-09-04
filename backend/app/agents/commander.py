@@ -7,6 +7,7 @@ from ..agentkit.base import BaseAgent
 from ..domain import scenarios as scen
 from ..domain.store import BOARD
 from ..rules import tools as R
+from ..rules.knowledge import knowledge_stats, query_knowledge
 
 
 class CommanderAgent(BaseAgent):
@@ -16,8 +17,9 @@ class CommanderAgent(BaseAgent):
     subgroup = "system"
     color = "#8b5cf6"
     emoji = "🧭"
+    tools = {"query_knowledge": query_knowledge, "knowledge_stats": knowledge_stats}
 
-    def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         scenario = scen.SCENARIOS.get(state.get("scenario", "standard"), scen.SCENARIOS["standard"])
         scene = R.load_json("data/scene.json")
@@ -30,8 +32,16 @@ class CommanderAgent(BaseAgent):
             uav.setdefault("target", None)
         inventory = R.load_json("data/inventory.json")
         BOARD.update(task_id, phase="analyzing", environment=scene, fleet=fleet, inventory=inventory)
-        self.say(task_id, "TASK_ASSIGN", "recon",
-                 f"接警建案 {task_id}:场景「{scenario['label']}」。侦察研判 Agent,请执行火情感知、环境研判与 FLP 评估。")
+        directive, trace = await self.think(
+            "下达任务指令: 向侦察研判 Agent 明确本次研判重点(不超过80字, 像指挥官下命令)",
+            f"场景「{scenario['label']}」,初始风 {scenario['wind_speed']} m/s,人员 {scenario['people_status']},"
+            f"火型 {scenario['fire_type']}", max_tokens=140)
+        order = directive or (f"接警建案 {task_id}:场景「{scenario['label']}」。侦察研判 Agent,"
+                             "请执行火情感知、环境研判与 FLP 评估。")
+        self.say(task_id, "TASK_ASSIGN", "recon", order, {"llm": None} if not directive else None)
+        if directive:
+            # LLM 生成的派单指令也走 say_llm 语义(附工具轨迹)
+            BOARD.require(task_id)["messages"][-1]["data"] = {"llm": "glm", "tools": [t["tool"] for t in trace]}
         return {
             "scenario_cfg": scenario, "environment": scene, "fleet": fleet, "inventory": inventory,
             "replans": 0, "round_index": 0, "rounds": [],
