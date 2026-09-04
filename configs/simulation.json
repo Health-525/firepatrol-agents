@@ -1,0 +1,42 @@
+{
+  "schema_version": "sim-v1",
+  "time": { "internal_step_minutes": 1, "round_minutes": 5, "max_rounds": 40 },
+  "demo": { "round_interval_ms": 1500, "replan_round": 3, "replan_wind_mps": 6.8 },
+  "grid": { "cell_m2": 100, "cols": 20, "rows": 14, "width_m": 2000, "height_m": 1400 },
+  "wind_bands": [
+    { "max_mps": 4.0, "k_wind": 1.0, "label": "0–4 m/s", "weather_efficiency": 1.0 },
+    { "max_mps": 6.0, "k_wind": 1.2, "label": "4–6 m/s", "weather_efficiency": 0.85 },
+    { "max_mps": 8.0, "k_wind": 1.5, "label": "6–8 m/s", "weather_efficiency": 0.65 }
+  ],
+  "k_wind_over": 1.5,
+  "weather_efficiency_over": 0.65,
+  "slope_bands": [
+    { "max_deg": 15.0, "k_slope": 1.0 },
+    { "max_deg": 30.0, "k_slope": 1.15 },
+    { "max_deg": 90.0, "k_slope": 1.3 }
+  ],
+  "fuel_factors": { "sparse_grass": 0.8, "general_forest": 1.0, "dense_fuel": 1.3 },
+  "kappa": {
+    "vegetation": { "water_20l": 1.0, "co2_6kg": 0.25 },
+    "electrical": { "water_20l": 0.0, "co2_6kg": 1.5 }
+  },
+  "drop_efficiency": { "clear": 0.9, "normal": 0.75, "poor": 0.55 },
+  "spray": {
+    "water_20l": { "quantity": 20.0, "rate_per_minute": 4.0, "minutes": 5, "module_mass_kg": 22 },
+    "co2_6kg": { "quantity": 6.0, "rate_per_minute": 1.5, "minutes": 4, "module_mass_kg": 14 }
+  },
+  "refill_minutes": { "base": 4, "water_source": 8 },
+  "module_swap_minutes": 5,
+  "charging": { "base_soc_per_hour": 100, "forward_soc_per_hour": 60, "battery_swap_minutes": 5, "battery_swap_soc": 95 },
+  "return_soc_percent": 25,
+  "emergency_soc_percent": 15,
+  "energy": {
+    "reconnaissance": { "cruise": 120, "hover": 100, "sense_aux": 5 },
+    "suppression": { "cruise_empty": 185, "cruise_loaded": 270, "hover_spray": 290 },
+    "support": { "cruise_empty": 100, "cruise_loaded": 150, "comms_hover": 75 }
+  },
+  "energy_correction": { "load": 0.45, "wind": 0.20, "climb": 0.10 },
+  "scoring_weights": { "time": 0.4, "residual": 0.3, "energy": 0.15, "material": 0.1, "change": 0.05 },
+  "scoring_refs": { "time_ref_minutes": 240, "energy_ref_per_uav": 400, "material_ref_liters": 400, "change_ref_rounds": 20 },
+  "triggers": { "flp_growth_ratio": 0.2, "wind_band_change": true, "return_soc": 25 }
+}

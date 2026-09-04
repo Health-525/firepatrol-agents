@@ -1,0 +1,25 @@
+{
+  "schema_version": "vision-fixtures-v1",
+  "default": {
+    "image_name": "default",
+    "detections": [
+      { "class_name": "fire", "confidence": 0.93, "box": [180, 210, 330, 340] },
+      { "class_name": "smoke", "confidence": 0.88, "box": [120, 60, 420, 260] }
+    ],
+    "image_width": 640, "image_height": 512,
+    "fire_area_m2": 620, "smoke_area_m2": 2200,
+    "image_area_ratio": 0.052, "growth_rate": 0.10,
+    "source": "vision-observation-fixture"
+  },
+  "small-fire": {
+    "image_name": "small-fire",
+    "detections": [
+      { "class_name": "fire", "confidence": 0.81, "box": [260, 240, 330, 310] },
+      { "class_name": "smoke", "confidence": 0.64, "box": [200, 160, 360, 280] }
+    ],
+    "image_width": 640, "image_height": 512,
+    "fire_area_m2": 210, "smoke_area_m2": 650,
+    "image_area_ratio": 0.011, "growth_rate": 0.05,
+    "source": "vision-observation-fixture"
+  }
+}

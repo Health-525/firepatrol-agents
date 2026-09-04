@@ -1,0 +1,13 @@
+{
+  "schema_version": "inventory-v1",
+  "water_liters": 600,
+  "water_modules_w20": 30,
+  "co2_modules_c6": 4,
+  "support_boxes_sup10": 6,
+  "battery_packs": 24,
+  "forward_supply_points": [
+    { "id": "base", "name": "北门指挥补给基地", "position": { "x": 260, "y": 240 }, "available": true, "battery_packs": 4 },
+    { "id": "fsp-1", "name": "前向补给点 FSP-1", "position": { "x": 1080, "y": 620 }, "available": true, "battery_packs": 0 }
+  ],
+  "last_updated": "2026-09-04T08:00:00Z"
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": "fleet-v1",
+  "uavs": [
+    { "uav_id": "R1", "subgroup": "reconnaissance", "status": "available", "position": { "x": 280, "y": 260, "z": 0 }, "soc": 96, "payload_capacity_kg": 2.5, "payload_module": "none", "agent_remaining": 0, "agent_unit": "kg", "speed_mps": 12, "signal": 96, "health": 100, "assigned_task": null, "energy_mode": "cruise" },
+    { "uav_id": "R2", "subgroup": "reconnaissance", "status": "available", "position": { "x": 300, "y": 230, "z": 0 }, "soc": 92, "payload_capacity_kg": 2.5, "payload_module": "none", "agent_remaining": 0, "agent_unit": "kg", "speed_mps": 12, "signal": 94, "health": 100, "assigned_task": null, "energy_mode": "cruise" },
+    { "uav_id": "E1", "subgroup": "suppression", "status": "available", "position": { "x": 240, "y": 280, "z": 0 }, "soc": 100, "payload_capacity_kg": 25, "payload_module": "water_20l", "agent_remaining": 20, "agent_unit": "L", "speed_mps": 8, "signal": 92, "health": 100, "assigned_task": null, "energy_mode": "cruise_loaded" },
+    { "uav_id": "E2", "subgroup": "suppression", "status": "available", "position": { "x": 250, "y": 300, "z": 0 }, "soc": 100, "payload_capacity_kg": 25, "payload_module": "water_20l", "agent_remaining": 20, "agent_unit": "L", "speed_mps": 8, "signal": 90, "health": 100, "assigned_task": null, "energy_mode": "cruise_loaded" },
+    { "uav_id": "E3", "subgroup": "suppression", "status": "available", "position": { "x": 230, "y": 310, "z": 0 }, "soc": 88, "payload_capacity_kg": 25, "payload_module": "water_20l", "agent_remaining": 20, "agent_unit": "L", "speed_mps": 8, "signal": 91, "health": 100, "assigned_task": null, "energy_mode": "cruise_loaded" },
+    { "uav_id": "E4", "subgroup": "suppression", "status": "charging", "position": { "x": 220, "y": 290, "z": 0 }, "soc": 46, "payload_capacity_kg": 25, "payload_module": "water_20l", "agent_remaining": 0, "agent_unit": "L", "speed_mps": 8, "signal": 89, "health": 100, "assigned_task": null, "energy_mode": "cruise_empty" },
+    { "uav_id": "S1", "subgroup": "support", "status": "available", "position": { "x": 270, "y": 220, "z": 0 }, "soc": 98, "payload_capacity_kg": 10, "payload_module": "sup_10kg", "agent_remaining": 2, "agent_unit": "箱", "speed_mps": 12, "signal": 97, "health": 100, "assigned_task": null, "energy_mode": "cruise_loaded" },
+    { "uav_id": "S2", "subgroup": "support", "status": "available", "position": { "x": 290, "y": 210, "z": 0 }, "soc": 95, "payload_capacity_kg": 10, "payload_module": "none", "agent_remaining": 0, "agent_unit": "箱", "speed_mps": 12, "signal": 95, "health": 100, "assigned_task": null, "energy_mode": "cruise_empty" }
+  ]
+}

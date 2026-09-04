@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+pydantic
+langgraph>=0.2
+langchain-core>=0.3

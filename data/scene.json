@@ -1,0 +1,24 @@
+{
+  "scene_id": "zijing-mountain-01",
+  "name": "紫金山北麓演示林区",
+  "terrain": "mountain_forest",
+  "elevation_m": 320,
+  "slope_deg": 12,
+  "fuel_type": "general_forest",
+  "wind_speed_mps": 5.2,
+  "wind_direction_deg": 315,
+  "map": { "width_m": 2000, "height_m": 1400, "cell_m": 100 },
+  "base": { "id": "base", "name": "北门指挥补给基地", "x": 260, "y": 240 },
+  "forward_supply_point": { "id": "fsp-1", "name": "前向补给点 FSP-1", "x": 1080, "y": 620 },
+  "water_sources": [
+    { "id": "ws-reservoir", "name": "北侧蓄水池", "x": 640, "y": 340, "available": true, "safe_access": true, "capacity_liters": 1200, "fill_minutes": 8 },
+    { "id": "ws-stream", "name": "东麓溪流", "x": 1500, "y": 300, "available": true, "safe_access": true, "capacity_liters": 800, "fill_minutes": 8 }
+  ],
+  "roads": [
+    { "id": "rd-north", "name": "北门巡护道", "points": [[260, 240], [700, 420], [1080, 620], [1350, 800]] },
+    { "id": "rd-east", "name": "东坡撤离便道", "points": [[1350, 800], [1650, 1050], [1900, 1250]] }
+  ],
+  "exits": [ { "id": "exit-north", "name": "北门出口", "x": 260, "y": 240 }, { "id": "exit-east", "name": "东侧集结点", "x": 1900, "y": 1250 } ],
+  "restricted_cells": [ { "cx": 5, "cy": 10 }, { "cx": 6, "cy": 10 }, { "cx": 16, "cy": 3 } ],
+  "people_zones": [ { "id": "pz-camp", "name": "东侧露营区", "cx": 15, "cy": 10, "people": 6 } ]
+}
