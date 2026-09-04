@@ -40,7 +40,8 @@ def _elev_grid(cols: int, rows: int) -> List[List[float]]:
 
 
 def plan_evacuation(scene: Dict[str, Any], fire_cells: List[Dict[str, Any]],
-                    people_zone: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                    people_zone: Optional[Dict[str, Any]] = None,
+                    start_cell: Optional[Tuple[int, int]] = None) -> Dict[str, Any]:
     cols, rows = _grid(scene)
     elev = _elev_grid(cols, rows)
     fire_map: Dict[Tuple[int, int], float] = {}
@@ -48,7 +49,7 @@ def plan_evacuation(scene: Dict[str, Any], fire_cells: List[Dict[str, Any]],
         fire_map[(int(cell["cx"]), int(cell["cy"]))] = float(cell.get("flp", 0))
     restricted = {(int(c["cx"]), int(c["cy"])) for c in scene.get("restricted_cells", [])}
     zone = people_zone or (scene.get("people_zones") or [{}])[0]
-    start = (int(zone.get("cx", 0)), int(zone.get("cy", 0)))
+    start = start_cell or (int(zone.get("cx", 0)), int(zone.get("cy", 0)))
     exits = scene.get("exits") or []
     exit_cells = [(e.get("name", "出口"), int(e["x"]) // 100, int(e["y"]) // 100) for e in exits] or [("出口", cols - 1, rows - 1)]
 
@@ -104,14 +105,73 @@ def plan_evacuation(scene: Dict[str, Any], fire_cells: List[Dict[str, Any]],
             "note": "火情或地形已封锁全部出口路径,建议呼叫空中引导至安全集结区"}
 
 
-def advance_people(evac: Dict[str, Any], round_minutes: float) -> Tuple[int, bool, Optional[Dict[str, Any]]]:
-    """推进人群沿路径移动。返回 (新的进度格数, 是否抵达, 当前所在格)。"""
+PANIC_MPS = 1.6  # 火焰邻格时的恐慌步速
+
+
+def fire_adjacent(path, progress: float, fire_cells: List[Dict[str, Any]]) -> Tuple[bool, bool]:
+    """返回 (邻火[切比雪夫1内有火], 贴身[当前格本身就是高强度火])。"""
+    path = path or []
+    if not path:
+        return False, False
+    here = path[min(int(progress), len(path) - 1)]
+    adjacent = False
+    for cell in fire_cells:
+        if cell.get("flp", 0) <= 0.01:
+            continue
+        dx = abs(cell["cx"] - here["cx"]); dy = abs(cell["cy"] - here["cy"])
+        if dx <= 1 and dy <= 1:
+            if cell["cx"] == here["cx"] and cell["cy"] == here["cy"] and cell.get("flp", 0) > 5:
+                return True, True
+            adjacent = True
+    return adjacent, False
+
+
+def advance_people(evac: Dict[str, Any], minutes: float, speed: float = WALK_MPS) -> Tuple[int, bool, Optional[Dict[str, Any]]]:
+    """推进人群沿路径移动(贴火时恐慌加速)。返回 (新的进度格数, 是否抵达, 当前所在格)。"""
     path = evac.get("path") or []
     if not path:
         return 0, False, None
     progress = float(evac.get("progress_cells", 0))
-    progress += WALK_MPS * round_minutes * 60 / CELL_M  # 每轮步行距离换算格数
+    progress += speed * minutes * 60 / CELL_M
     done = progress >= len(path) - 1
     progress = min(progress, len(path) - 1)
     here = path[int(progress)]
     return round(progress, 2), done, here
+
+
+def _line_cells(a: Tuple[int, int], b: Tuple[int, int]):
+    """Bresenham: a->b 经过的所有格。"""
+    (x0, y0), (x1, y1) = a, b
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    while True:
+        yield (x0, y0)
+        if (x0, y0) == (x1, y1):
+            return
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy; x0 += sx
+        if e2 < dx:
+            err += dx; y0 += sy
+
+
+def smooth_path(path: List[Dict[str, Any]], fire_cells: List[Dict[str, Any]],
+                restricted: List[Dict[str, Any]], cols: int, rows: int) -> List[Dict[str, Any]]:
+    """视线拉直: 从当前点尽量直连最远的可通视路径点, 消除网格楼梯折线。"""
+    blocked = {(int(c["cx"]), int(c["cy"])) for c in restricted}
+    blocked |= {(int(c["cx"]), int(c["cy"])) for c in fire_cells if c.get("flp", 0) > 5}
+    cells = [(p["cx"], p["cy"]) for p in path]
+    out = [path[0]]
+    i = 0
+    while i < len(cells) - 1:
+        j = len(cells) - 1
+        while j > i + 1:
+            if all(0 <= x < cols and 0 <= y < rows and (x, y) not in blocked
+                   for x, y in _line_cells(cells[i], cells[j])):
+                break
+            j -= 1
+        out.append(path[j])
+        i = j
+    return out

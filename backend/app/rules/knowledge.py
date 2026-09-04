@@ -21,6 +21,7 @@ KNOWLEDGE_DIR = ROOT / "data" / "knowledge"
 SOURCES = {
     "rules": {"file": "无人机子群与参数规则.md", "title": "无人机子群与参数规则 V1", "loader": "text"},
     "design": {"file": "思路细化.md", "title": "项目思路细化", "loader": "text"},
+    "experience": {"file": "未知险情处置经验.md", "title": "未知险情处置经验(研判参考)", "loader": "text"},
     "paper": {"file": "PWM-Net论文.pdf", "title": "PWM-Net 频域增强林火检测论文", "loader": "pdf"},
 }
 

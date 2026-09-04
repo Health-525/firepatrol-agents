@@ -85,6 +85,8 @@ class Blackboard:
             "environment": mission["environment"], "candidates": mission["candidates"],
             "plan": mission["plan"], "rounds": mission["rounds"], "messages": mission["messages"],
             "support_plan": mission.get("support_plan"),  # 含疏散路线/人群进度, 前端地图依赖
+            "search": mission.get("search"),  # 搜索阶段覆盖度(发现前 fire 为空)
+            "last_judgment": mission.get("last_judgment"),  # 最近一轮自主研判(继续/重规划/终止 + 理由)
             "approval_request": mission["approval_request"], "report": mission["report"],
         }
 

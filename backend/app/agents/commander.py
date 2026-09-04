@@ -34,7 +34,13 @@ class CommanderAgent(BaseAgent):
             uav.setdefault("soc_cost_total", 0.0)
             uav.setdefault("target", None)
         inventory = R.load_json("data/inventory.json")
-        BOARD.update(task_id, phase="analyzing", environment=scene, fleet=fleet, inventory=inventory)
+        # 真值隐藏: 火从 t=0 已存在, 但系统"看不见"—— 先派 R 机巡航搜索
+        ignition_cell = scenario["fire_cells"][0]
+        truth = {"cx": ignition_cell["cx"], "cy": ignition_cell["cy"],
+                 "x": ignition_cell["cx"] * 100 + 50, "y": ignition_cell["cy"] * 100 + 50,
+                 "intensity": ignition_cell["intensity"], "detected": False}
+        BOARD.update(task_id, phase="searching", environment=scene, fleet=fleet, inventory=inventory,
+                     fire=None, search={"legs": 0, "coverage": 0}, truth=truth)
         order = (f"接警建案 {task_id}:场景「{scenario['label']}」。侦察研判 Agent,"
                  "请执行火情感知、环境研判与 FLP 评估。")
         self.say(task_id, "TASK_ASSIGN", "recon", order)
@@ -45,7 +51,8 @@ class CommanderAgent(BaseAgent):
                       f"火型 {scenario['fire_type']}", max_tokens=140)
         return {
             "scenario_cfg": scenario, "environment": scene, "fleet": fleet, "inventory": inventory,
-            "replans": 0, "round_index": 0, "rounds": [],
+            "replans": 0, "round_index": 0, "rounds": [], "truth": truth,
+            "search_legs_done": 0, "search_detected": False,
         }
 
     def decide(self, state: Dict[str, Any]) -> Dict[str, Any]:

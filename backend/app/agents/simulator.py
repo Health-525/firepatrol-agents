@@ -1,4 +1,4 @@
-"""⑤ 仿真评估 Agent —— 裁判: 候选离散预演+评分选优; 审批后按 5 分钟轮次驱动执行与触发判定。"""
+"""⑤ 仿真评估 Agent —— 裁判: 候选离散预演+评分选优; 审批后按 5 分钟轮次驱动执行, 每轮自主研判。"""
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +10,7 @@ from ..domain.store import BOARD
 from ..rules import tools as R
 from ..rules.environment import observe_wind
 from ..rules.knowledge import query_knowledge
+from . import judgment
 
 RETURN_SOC = R.RETURN_SOC
 
@@ -17,7 +18,7 @@ RETURN_SOC = R.RETURN_SOC
 class SimulatorAgent(BaseAgent):
     agent_id = "simulator"
     name = "仿真评估"
-    role = "离散轮次仿真 · 多目标评分 J · 净处置能力 · 触发重规划"
+    role = "离散轮次仿真 · 多目标评分 J · 净处置能力 · 每轮自主研判"
     subgroup = "system"
     color = "#f59e0b"
     emoji = "⚖️"
@@ -290,37 +291,51 @@ class SimulatorAgent(BaseAgent):
             fire["wind_band"] = band["band"]
             fire["wind_band_label"] = band["label"]
 
-        # --- 疏散推进: 人群沿 A* 路线移动; 火情封锁路径时改道并再次语音广播
+        # --- 疏散推进: 火人交互(贴火加速/贴身被困) + 从人群当前位置改道
         if evac.get("path") and not evac.get("evacuated"):
-            from ..rules.evacuation import advance_people, plan_evacuation as plan_evac
-            blocked = [c for c in fire["cells"] if c["flp"] > 5]
-            still_safe = all(not any(c["cx"] == p["cx"] and c["cy"] == p["cy"] for c in blocked) for p in evac["path"])
-            if not still_safe:
-                zone = (state["environment"].get("people_zones") or [{}])[0]
-                reroute = plan_evac(state["environment"], fire["cells"], zone)
-                if reroute["found"] and reroute.get("path") != evac["path"]:
-                    old_exit = evac["exit"]
-                    evac.update({"exit": reroute["exit"], "path": reroute["path"],
-                                 "walk_minutes": reroute["walk_minutes"], "climb_m": reroute["climb_m"],
-                                 "progress_cells": 0})
-                    round_events.append(f"火情封锁原疏散路线,已改道至 {reroute['exit']}(约 {reroute['walk_minutes']} 分钟)")
-                    self.say(task_id, "EVAC_BROADCAST", "human",
-                             f"🔊 注意:原路线已被火情封锁!请立即改道,沿新路线向 {reroute['exit']} 撤离,"
-                             f"全程约 {reroute['walk_minutes']} 分钟,S1 将继续在上空引导。",
-                             {"evacuation": {"exit": reroute["exit"], "path": reroute["path"], "reroute": True}})
-                elif not reroute["found"]:
-                    round_events.append("疏散路线全部被封锁,S1 引导人员原地避险等待增援")
-            progress, done, here = advance_people(evac, round_minutes)
-            evac["progress_cells"] = progress
-            if done and not evac.get("evacuated"):
-                evac["evacuated"] = True
-                round_events.append(f"人员已全部抵达 {evac['exit']},疏散完成")
+            from ..rules.evacuation import PANIC_MPS, WALK_MPS, advance_people, fire_adjacent, plan_evacuation as plan_evac
+            adjacent, on_fire = fire_adjacent(evac["path"], float(evac.get("progress_cells", 0)), fire["cells"])
+            if on_fire and not evac.get("trapped"):
+                evac["trapped"] = True
+                round_events.append("火焰已蔓延至人群所在格!人员被困,S1 就近引导向背火开阔地避险")
                 self.say(task_id, "EVAC_BROADCAST", "human",
-                         f"🔊 疏散完成:{evac.get('people', '全体')}名人员已安全抵达 {evac['exit']}。",
-                         {"evacuation": {"evacuated": True}})
-            elif here and round_index % 2 == 0:
-                round_events.append(f"疏散进行中:人群位于 ({here['cx']},{here['cy']}),距出口约 "
-                                    f"{max(0, len(evac['path']) - 1 - int(progress))} 格")
+                         "🔊 紧急!火势已逼近队伍,请立即离开现有路线,向背火方向的开阔地快速转移,S1 在上空引导!")
+            if not evac.get("trapped"):
+                blocked = [c for c in fire["cells"] if c["flp"] > 5]
+                still_safe = all(not any(c["cx"] == p["cx"] and c["cy"] == p["cy"] for c in blocked) for p in evac["path"])
+                if not still_safe:
+                    here_idx = min(int(float(evac.get("progress_cells", 0))), len(evac["path"]) - 1)
+                    here_cell = evac["path"][here_idx]
+                    reroute = plan_evac(state["environment"], fire["cells"],
+                                        (state["environment"].get("people_zones") or [{}])[0],
+                                        start_cell=(here_cell["cx"], here_cell["cy"]))  # 从人群当前位置改道, 不传送回营地
+                    if reroute["found"] and reroute.get("path") != evac["path"]:
+                        evac.update({"exit": reroute["exit"], "path": reroute["path"],
+                                     "walk_minutes": reroute["walk_minutes"], "climb_m": reroute["climb_m"],
+                                     "progress_cells": 0})
+                        round_events.append(f"火情封锁原路线,人群已从当前位置改道至 {reroute['exit']}(约 {reroute['walk_minutes']} 分钟)")
+                        self.say(task_id, "EVAC_BROADCAST", "human",
+                                 f"🔊 注意:原路线已被火情封锁!请立即改道,沿新路线向 {reroute['exit']} 撤离,"
+                                 f"约 {reroute['walk_minutes']} 分钟,S1 继续在上空引导。",
+                                 {"evacuation": {"exit": reroute["exit"], "path": reroute["path"], "reroute": True}})
+                    elif not reroute["found"]:
+                        evac["trapped"] = True
+                        round_events.append("疏散路线全部被封锁,人员被困,S1 引导原地避险等待增援")
+                        self.say(task_id, "EVAC_BROADCAST", "human", "🔊 各出口通道均被火情封锁!请就近寻找开阔地与背火坡避险,S1 持续在空中引导!")
+                speed = PANIC_MPS if adjacent else WALK_MPS
+                if adjacent:
+                    round_events.append("火线临近,人群转入恐慌步速(1.6 m/s)")
+                progress, done, here = advance_people(evac, action_minutes, speed)
+                evac["progress_cells"] = progress
+                if done and not evac.get("evacuated"):
+                    evac["evacuated"] = True
+                    round_events.append(f"人员已全部抵达 {evac['exit']},疏散完成")
+                    self.say(task_id, "EVAC_BROADCAST", "human",
+                             f"🔊 疏散完成:{evac.get('people', '全体')}名人员已安全抵达 {evac['exit']}。",
+                             {"evacuation": {"evacuated": True}})
+                elif here and round_index % 2 == 0:
+                    round_events.append(f"疏散进行中:人群位于 ({here['cx']},{here['cy']}),距出口约 "
+                                        f"{max(0, len(evac['path']) - 1 - int(progress))} 格")
             support_plan["evacuation"] = evac
 
         # --- 火情轮次演化: B_(t+dt) = max(0, B + G*dt/60 - ΣS)
@@ -335,21 +350,13 @@ class SimulatorAgent(BaseAgent):
             cell["flp"] = round(max(0, cell["flp"] - suppression_flp * share), 3)
         fire["total_flp"] = round(sum(c["flp"] for c in fire["cells"]), 2)
 
-        # --- 触发判定(规则 10: 关键事件, 由观测驱动)
-        trigger = None
-        if band_jump:
-            trigger = {"type": "wind_band_change", "detail": f"观测风速 {fire['wind_speed']} m/s 进入 {fire['wind_band_label']}",
-                       "rule": "风速进入更高档位 → 强制重规划"}
-        elif before > 0 and fire["total_flp"] > before * (1 + R.sim_config()["triggers"]["flp_growth_ratio"]):
-            trigger = {"type": "flp_growth", "detail": f"火情负荷上升超过 20%", "rule": "FLP↑>20% → 强制重规划"}
-
         sim_minutes = state.get("sim_minutes", 0.0) + action_minutes
         record = {
             "round_index": round_index, "sim_minutes": round(sim_minutes, 1),
             "duration_min": round(action_minutes, 1),
             "before_flp": before, "growth_flp": result["growth_flp"],
             "suppression_flp": round(suppression_flp, 2), "after_flp": fire["total_flp"],
-            "wind_speed": wind_speed,
+            "wind_speed": wind_speed, "band_jump": bool(band_jump),
             "uavs": [{"uav_id": u["uav_id"], "status": u["status"], "position": dict(u["position"]), "soc": u["soc"],
                       "agent_remaining": u["agent_remaining"], "sorties": u["sorties"], "swaps": u["swaps"],
                       "refills": u["refills"]} for u in fleet],
@@ -364,38 +371,61 @@ class SimulatorAgent(BaseAgent):
                  f"本轮压制 {round(suppression_flp, 1)};{events_text}",
                  {"round": record})
 
-        # 卡滞计数: 所有灭火机连续多轮返航/充电且无人作业 → 资源周转缺口
+        # 卡滞计数: 所有灭火机连续多轮返航/充电且无人作业(作为研判输入, 不再直接决定终止)
         active = [by_id[uid] for uid in cand["suppression_uavs"] if by_id[uid]["status"] not in {"fault"}]
         stalled_states = {"returning", "charging"}
         all_stalled = all(u["status"] in stalled_states for u in active) if active else True
         any_working = any(u["status"] in {"working", "servicing", "available", "assigned"} for u in active)
         stall_rounds = (state.get("stall_rounds", 0) + 1) if (all_stalled and not any_working) else 0
 
-        route, conclusion = "next_round", None
+        # 只有物理事实(测量)直接终止: 火灭 / 仿真视界; 其余一律交给自主研判
+        route, conclusion = "judge", None
         if fire["total_flp"] <= 0.01:
-            # 火情已归零: 无论本轮是否同时出现风变等触发, 优先结束, 不做无意义重规划
             route, conclusion = "done", "火情负荷归零,首轮控制目标达成。"
-        elif trigger:
-            route = "replan"
-            replans = state.get("replans", 0) + 1
-            BOARD.update(task_id, phase="replanning", replans=replans)
-            self.say(task_id, "REPLAN_TRIGGER", "commander",
-                     f"触发重规划:{trigger['detail']}({trigger['rule']})。指挥官请重新组织研判与方案生成。", trigger)
-            self.think_bg(task_id, "REPLAN_TRIGGER", "commander",
-                          "分析突变影响: 触发事件对火势/药剂效率/方案的影响, 以及重规划应重点调整什么",
-                          f"第{round_index}轮, 触发: {trigger['detail']};当前 B={fire['total_flp']} FLP,"
-                          f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),本轮压制 {round(suppression_flp, 1)} FLP")
         elif round_index >= cfg["time"]["max_rounds"]:
             route, conclusion = "done", f"达到最大轮次({cfg['time']['max_rounds']}),剩余 FLP {fire['total_flp']}。"
-        elif active and stall_rounds >= 4:
-            route, conclusion = "done", f"灭火机持续无法出动(电池/电量周转不足),剩余 FLP {fire['total_flp']},输出资源缺口。"
 
         await asyncio.sleep(demo["round_interval_ms"] / 1000)  # 演示节奏
         out = {"round_index": round_index, "rounds": rounds, "fleet": fleet, "inventory": inventory,
-               "fire": fire, "route": route, "stall_rounds": stall_rounds, "sim_minutes": round(sim_minutes, 1)}
+               "fire": fire, "route": route, "stall_rounds": stall_rounds, "sim_minutes": round(sim_minutes, 1),
+               "support_plan": support_plan}
         if conclusion:
             out["conclusion"] = conclusion
         return out
+
+    # ------------------------------------------------ 自主研判: 要不要继续, 由 Agent 大脑判断
+
+    async def judge_round(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """执行轮次后的研判节点: 无固定触发表, GLM 大脑对全量快照自主定级与决策; 降级保底见 judgment 模块。"""
+        task_id = state["task_id"]
+        snapshot = judgment.build_snapshot(state)
+        verdict, trace = await judgment.judge(snapshot)
+        round_index = snapshot["round_index"]
+
+        data = {"judgment": verdict, "source": verdict["source"],
+                "tools": [t["tool"] for t in trace]}
+        self.say(task_id, "JUDGMENT", "commander",
+                 f"⚖️ 第 {round_index} 轮自主研判({verdict['source']}):[{verdict['severity']}] "
+                 f"{verdict['situation']} → {verdict['decision']}。{verdict['rationale']}", data)
+        if verdict["escalate"]:
+            self.say(task_id, "JUDGMENT", "human",
+                     f"⚠️ 第 {round_index} 轮研判请求人工关注:{verdict['situation']}。{verdict['expected']}", data)
+
+        BOARD.update(task_id, last_judgment=verdict)
+        if verdict["decision"] == "replan":
+            replans = state.get("replans", 0) + 1
+            BOARD.update(task_id, phase="replanning", replans=replans)
+            self.say(task_id, "REPLAN_TRIGGER", "commander",
+                     f"触发重规划:{verdict['situation']}(severity={verdict['severity']},"
+                     f"研判来源={verdict['source']})。指挥官请基于实时状态重新组织研判与方案生成。", verdict)
+            return {"route": "replan", "replans": replans, "last_replan_round": round_index,
+                    "last_judgment": verdict}
+        if verdict["decision"] == "terminate":
+            fire = state.get("fire") or {}
+            conclusion = verdict.get("conclusion") or \
+                f"研判终止:{verdict['situation']}(剩余 FLP {fire.get('total_flp')})。"
+            return {"route": "done", "conclusion": conclusion, "last_judgment": verdict}
+        return {"route": "next_round", "last_judgment": verdict}
 
     @staticmethod
     def _take_pack(inventory: Dict[str, Any]) -> bool:

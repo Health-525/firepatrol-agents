@@ -3,11 +3,14 @@
 结构(与《多Agent架构设计》一致):
 START → 指挥官接警 → 侦察研判 → (灭火调度 ∥ 支援保障) → 仿真评估
       → 交互审批(interrupt 审批门) → 指挥官仲裁
-          ├─ approve  → 轮次执行 ──┬─ next_round → 轮次执行(环)
-          │                        ├─ replan → 侦察研判(重规划环, 再次审批)
-          │                        └─ done → 报告归档 → END
+          ├─ approve  → 轮次执行 → 自主研判 ─┬─ next_round → 轮次执行(环)
+          │                                ├─ replan → 侦察研判(重规划环, 再次审批)
+          │                                └─ done → 报告归档 → END
           ├─ adjust → 侦察研判(带用户约束)
           └─ reject → 报告归档 → END
+
+自主研判节点(judge_round): 每轮执行后由仿真评估 Agent 的 GLM 大脑对全量快照判断
+继续/重规划/终止, 无固定触发表; GLM 不可用时保守降级(见 agents/judgment.py)。
 """
 from __future__ import annotations
 
@@ -35,6 +38,10 @@ class MissionState(TypedDict, total=False):
     image_name: str
     scenario: str
     scenario_cfg: Dict[str, Any]
+    # 搜索阶段(真值隐藏: 发现前系统不可见火情)
+    truth: Dict[str, Any]
+    search_legs_done: int
+    search_detected: bool
     # 黑板镜像
     environment: Dict[str, Any]
     fleet: list
@@ -63,6 +70,9 @@ class MissionState(TypedDict, total=False):
     conclusion: str
     report: Dict[str, Any]
     phase: str
+    # 自主研判
+    last_replan_round: int
+    last_judgment: Dict[str, Any]
 
 
 def _route_decide(state: MissionState) -> str:
@@ -76,6 +86,7 @@ def _route_round(state: MissionState) -> str:
 def build_mission_graph():
     graph = StateGraph(MissionState)
     graph.add_node("commander_intake", COMMANDER.handle)
+    graph.add_node("search_round", RECON.search_round)
     graph.add_node("recon", RECON.handle)
     graph.add_node("suppression", SUPPRESSION.handle)
     graph.add_node("support", SUPPORT.handle)
@@ -83,10 +94,13 @@ def build_mission_graph():
     graph.add_node("approver", APPROVER.prepare)
     graph.add_node("commander_decide", COMMANDER.decide)
     graph.add_node("execute_round", SIMULATOR.execute_round)
+    graph.add_node("judge_round", SIMULATOR.judge_round)
     graph.add_node("report", APPROVER.report)
 
     graph.add_edge(START, "commander_intake")
-    graph.add_edge("commander_intake", "recon")
+    graph.add_edge("commander_intake", "search_round")
+    graph.add_conditional_edges("search_round", lambda state: "found" if state.get("search_detected") else "searching",
+                                {"found": "recon", "searching": "search_round"})
     graph.add_edge("recon", "suppression")   # 并行分支 1
     graph.add_edge("recon", "support")       # 并行分支 2
     graph.add_edge("suppression", "simulator")
@@ -96,6 +110,8 @@ def build_mission_graph():
     graph.add_conditional_edges("commander_decide", _route_decide,
                                 {"next_round": "execute_round", "adjust": "recon", "rejected": "report"})
     graph.add_conditional_edges("execute_round", _route_round,
+                                {"judge": "judge_round", "done": "report"})
+    graph.add_conditional_edges("judge_round", _route_round,
                                 {"next_round": "execute_round", "replan": "recon", "done": "report"})
     graph.add_edge("report", END)
     return graph.compile(checkpointer=MemorySaver())

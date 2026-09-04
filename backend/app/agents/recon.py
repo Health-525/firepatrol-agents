@@ -1,10 +1,12 @@
-"""② 侦察研判 Agent —— 火情感知(PWM-Net fixture)、环境研判、FLP 网格评估、人员状态。"""
+"""② 侦察研判 Agent —— 巡航搜索发现火情(PWM-Net)、环境研判、FLP 网格评估、人员状态。"""
 from __future__ import annotations
 
-from typing import Any, Dict
+import asyncio
+from typing import Any, Dict, Optional
 
 from ..agentkit.base import BaseAgent
 from ..domain.store import BOARD
+from ..rules import search as S
 from ..rules import tools as R
 from ..rules.knowledge import query_knowledge
 
@@ -16,15 +18,75 @@ def cell_center(cx: int, cy: int) -> Dict[str, float]:
 class ReconAgent(BaseAgent):
     agent_id = "recon"
     name = "侦察研判"
-    role = "火情感知 · 环境研判 · FLP 评估 · 有人/无人判断"
+    role = "巡航搜索发现火情 · 环境研判 · FLP 评估 · 有人/无人判断"
     subgroup = "reconnaissance"
     color = "#3b82f6"
     emoji = "🔭"
+
+    # ------------------------------------------------ 搜索阶段: 每次调用飞一条巡航航线
+
+    async def search_round(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """R1/R2 各飞一条巡逻航线并扫描; 起火点进入检测半径才算发现。
+
+        未发现前: 火对系统不可见(board.fire 为空), 地图上不存在火情;
+        发现后: 回传指挥中心, 进入研判。
+        """
+        cfg = R.sim_config()
+        task_id = state["task_id"]
+        truth = state["truth"]
+        ignition = {"cx": truth["cx"], "cy": truth["cy"], "x": truth["x"], "y": truth["y"]}
+        intensity = truth["intensity"]
+        legs_done = state.get("search_legs_done", 0)
+        fleet = state["fleet"]
+        by_id = {u["uav_id"]: u for u in fleet}
+        detected_by: Optional[str] = None
+
+        for uav_id, legs in S.PATTERN.items():
+            leg_index = min(legs_done, len(legs) - 1)
+            leg = legs[leg_index]
+            hit, dist = S.scan_leg(leg, ignition, intensity)
+            uav = by_id.get(uav_id)
+            if uav and uav["status"] != "fault":
+                uav["position"] = {"x": leg["x1"], "y": leg["y"], "z": 60}
+                uav["status"] = "working"
+                uav["soc"] = round(max(0, uav["soc"] - R.delta_soc(
+                    R.uav_mode_rate(uav, loaded=False), cfg["time"]["round_minutes"])), 2)
+            if hit and detected_by is None:
+                detected_by = uav_id
+
+        legs_done += 1
+        coverage_pct = S.coverage(legs_done)
+        BOARD.update(task_id, phase="searching", fleet=fleet, search={"legs": legs_done, "coverage": coverage_pct})
+
+        if detected_by:
+            truth["detected"] = True
+            truth["detected_by"] = detected_by
+            BOARD.update(task_id, truth=truth)
+            self.say(task_id, "FINDING", "commander",
+                     f"🔭 {detected_by} 巡航至 ({ignition['cx']},{ignition['cy']}) 附近,机载检测(PWM-Net)发现明火与烟柱,"
+                     f"置信度 0.93,已回传指挥中心!搜索耗时 {legs_done} 个巡航段,地图覆盖率 {coverage_pct}%。",
+                     {"detected": True, "ignition": ignition, "coverage": coverage_pct})
+            return {"search_detected": True, "search_legs_done": legs_done, "truth": truth}
+
+        self.say(task_id, "INFO", "commander",
+                 f"搜索巡航第 {legs_done} 段:R1/R2 已扫描 {coverage_pct}% 区域,暂未发现明火。")
+        if legs_done >= 6:  # 兜底: 全图两遍必发现(烟柱扩散)
+            truth["detected"] = True
+            truth["detected_by"] = "R1"
+            BOARD.update(task_id, truth=truth)
+            self.say(task_id, "FINDING", "commander",
+                     f"🔭 R1 复扫发现烟柱扩散,确认火点 ({ignition['cx']},{ignition['cy']}),已回传!")
+            return {"search_detected": True, "search_legs_done": legs_done, "truth": truth}
+        await asyncio.sleep(cfg["demo"]["round_interval_ms"] / 1000)
+        return {"search_detected": False, "search_legs_done": legs_done}
+
+    # ------------------------------------------------ 研判
 
     async def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         cfg = state["scenario_cfg"]
         scene = state["environment"]
+        BOARD.update(task_id, phase="analyzing")
         mid_mission = state.get("round_index", 0) > 0 and state.get("fire")
 
         if mid_mission:

@@ -6,7 +6,7 @@ from typing import Any, Dict
 from ..agentkit.base import BaseAgent
 from ..domain.store import BOARD
 from ..rules import tools as R
-from ..rules.evacuation import plan_evacuation
+from ..rules.evacuation import plan_evacuation, smooth_path
 from ..rules.knowledge import query_knowledge
 
 

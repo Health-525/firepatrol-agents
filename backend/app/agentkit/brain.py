@@ -60,9 +60,13 @@ class AgentBrain:
             {"role": "user", "content": f"任务: {task}\n\n当前实时数据(规则引擎产出, 不可修改):\n{context}"},
         ]
         trace: List[Dict[str, Any]] = []
-        for _ in range(max_tool_rounds + 1):
+        for index in range(max_tool_rounds + 1):
+            final_round = index == max_tool_rounds
+            # 最后一轮禁用工具: 模型必须基于已获取的工具结果直出结论,
+            # 否则勤勉的模型会把全部轮次花在调工具上, 永远不给答案
             payload = await _post_chat({"model": _cfg()[2], "messages": messages, "tools": self.schemas,
-                                        "tool_choice": "auto", "temperature": temperature,
+                                        "tool_choice": "none" if final_round else "auto",
+                                        "temperature": temperature,
                                         "max_tokens": max_tokens}, timeout)
             if not payload:
                 return None, trace
@@ -74,6 +78,8 @@ class AgentBrain:
             if not tool_calls:
                 text = (message.get("content") or "").strip()
                 return (text or None), trace
+            if final_round:
+                return None, trace  # 强制直出轮仍请求工具: 放弃, 调用方走降级
             messages.append({"role": "assistant", "content": message.get("content") or "",
                              "tool_calls": tool_calls})
             for call in tool_calls[:4]:  # 单轮最多执行 4 个工具, 防滥用
