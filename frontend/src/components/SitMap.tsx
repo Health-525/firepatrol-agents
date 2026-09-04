@@ -70,11 +70,55 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   ctx.fillStyle = '#0b1512'
   ctx.fillRect(0, 0, vw, vh)
 
-  // 网格
+  // 网格 + 坐标尺(指挥地图惯例: 顶部列号 / 左侧行号, 每 200m 标注)
   ctx.strokeStyle = 'rgba(74, 138, 110, 0.16)'
   ctx.lineWidth = 1
   for (let x = 0; x <= W; x += 100) { ctx.beginPath(); ctx.moveTo(px(x), py(0)); ctx.lineTo(px(x), py(H)); ctx.stroke() }
   for (let y = 0; y <= H; y += 100) { ctx.beginPath(); ctx.moveTo(px(0), py(y)); ctx.lineTo(px(W), py(y)); ctx.stroke() }
+
+  // 等高线纹理(低透明度贝塞尔弧, 山地指挥图质感)
+  ctx.strokeStyle = 'rgba(94, 131, 113, 0.13)'
+  ctx.lineWidth = 1.2
+  for (let i = 0; i < 7; i++) {
+    ctx.beginPath()
+    const baseY = 140 + i * 170
+    ctx.moveTo(px(60 + i * 90), py(baseY))
+    ctx.bezierCurveTo(px(500 + i * 40), py(baseY - 130), px(1100 - i * 30), py(baseY + 120), px(1900 - i * 60), py(baseY - 40))
+    ctx.stroke()
+  }
+
+  ctx.fillStyle = 'rgba(110, 140, 128, 0.5)'
+  ctx.font = '9px Consolas, monospace'
+  for (let x = 0; x < W; x += 200) ctx.fillText(String(x), px(x) + 3, py(0) + 12)
+  for (let y = 0; y < H; y += 200) ctx.fillText(String(y), px(0) + 4, py(y) + 11)
+
+  // 风场矢量阵列(无任务时指向场景盛行风向 西北→东南)
+  const windActive = !!snap?.fire
+  const windDeg = windActive ? 315 : 315
+  const wdx = Math.cos((windDeg * Math.PI) / 180), wdy = Math.sin((windDeg * Math.PI) / 180)
+  ctx.strokeStyle = 'rgba(103, 232, 249, 0.22)'
+  ctx.lineWidth = 1.2
+  for (let gx = 250; gx < W - 100; gx += 330) {
+    for (let gy = 250; gy < H - 100; gy += 300) {
+      const drift = windActive ? Math.sin(ts / 900 + gx / 300 + gy / 400) * 26 : Math.sin(ts / 1600 + gx / 300) * 14
+      const ax = px(gx + drift), ay = py(gy + drift * 0.4)
+      ctx.beginPath(); ctx.moveTo(ax - wdx * 14, ay - wdy * 14); ctx.lineTo(ax + wdx * 14, ay + wdy * 14); ctx.stroke()
+      ctx.beginPath(); ctx.arc(ax + wdx * 14, ay + wdy * 14, 2.2, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(103, 232, 249, 0.3)'; ctx.fill()
+    }
+  }
+
+  // 空态提示
+  if (!snap?.fire && !snap?.fleet?.length) {
+    ctx.fillStyle = 'rgba(143, 163, 154, 0.65)'
+    ctx.font = '13px "Microsoft YaHei UI", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('等待任务 · 选择演练场景并点击「开始任务」', px(W / 2), py(H / 2) - 8)
+    ctx.fillStyle = 'rgba(143, 163, 154, 0.4)'
+    ctx.font = '10.5px Consolas, monospace'
+    ctx.fillText('紫金山北麓演示林区 · 2000m × 1400m · 100m² 网格', px(W / 2), py(H / 2) + 14)
+    ctx.textAlign = 'left'
+  }
 
   if (!sc) return
 
@@ -103,7 +147,7 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   marker(ctx, px(sc.base.x), py(sc.base.y), '#facc15', '基地')
   marker(ctx, px(sc.forward_supply_point.x), py(sc.forward_supply_point.y), '#fbbf24', 'FSP-1')
 
-  // 火情网格(FLP 热度 + 呼吸动画)
+  // 火情网格(FLP 径向热力 + 呼吸动画)
   const fire = snap?.fire
   if (fire) {
     const maxFlp = Math.max(...fire.cells.map(c => c.flp), 1)
@@ -111,10 +155,16 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
       if (cell.flp <= 0.01) continue
       const pulse = 0.55 + 0.35 * Math.sin(ts / 350 + cell.cx + cell.cy)
       const alpha = Math.min(0.92, (cell.flp / maxFlp) * pulse + 0.15)
-      ctx.fillStyle = `rgba(239, 68, 68, ${alpha.toFixed(3)})`
-      ctx.fillRect(px(cell.x - 50), py(cell.y - 50), 100 * scale, 100 * scale)
+      const size = 100 * scale
+      const cx0 = px(cell.x), cy0 = py(cell.y)
+      const gradient = ctx.createRadialGradient(cx0, cy0, size * 0.1, cx0, cy0, size * 0.85)
+      gradient.addColorStop(0, `rgba(246, 194, 107, ${Math.min(1, alpha + 0.25).toFixed(3)})`)
+      gradient.addColorStop(0.45, `rgba(239, 68, 68, ${alpha.toFixed(3)})`)
+      gradient.addColorStop(1, 'rgba(153, 27, 27, 0.05)')
+      ctx.fillStyle = gradient
+      ctx.fillRect(cx0 - size / 2, cy0 - size / 2, size, size)
       ctx.strokeStyle = `rgba(251, 146, 60, ${Math.min(1, alpha + 0.2).toFixed(3)})`
-      ctx.strokeRect(px(cell.x - 50), py(cell.y - 50), 100 * scale, 100 * scale)
+      ctx.strokeRect(cx0 - size / 2, cy0 - size / 2, size, size)
     }
   }
 

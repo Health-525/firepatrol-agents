@@ -116,6 +116,11 @@ export interface Scene {
   map: { width_m: number; height_m: number; cell_m: number }
 }
 
+export interface PhaseStepperProps {
+  phase: string
+  replans: number
+}
+
 export const SUBGROUP_META: Record<string, { label: string; color: string; short: string }> = {
   reconnaissance: { label: '侦察监测 R', color: '#3b82f6', short: 'R' },
   suppression: { label: '灭火处置 E', color: '#ef4444', short: 'E' },
