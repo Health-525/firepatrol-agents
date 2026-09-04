@@ -21,7 +21,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [llm, setLlm] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null })
+  const [llm, setLlm] = useState<{ connected: boolean; model: string | null; degraded?: boolean; last_error?: string | null }>({ connected: false, model: null })
   const [defaults, setDefaults] = useState<{ water: number | null; packs: number | null }>({ water: null, packs: null })
   const [terrain, setTerrain] = useState<TerrainModel | null>(null)
   const pollRef = useRef<number | null>(null)
@@ -31,10 +31,12 @@ export default function App() {
     fetch('/api/scene').then(r => r.json()).then(setScene).catch(() => {})
     fetch('/api/terrain').then(r => r.json()).then(setTerrain).catch(() => {})
     llmStatus().then(setLlm).catch(() => {})
+    const llmTimer = window.setInterval(() => llmStatus().then(setLlm).catch(() => {}), 10000)
     fetch('/api/inventory').then(r => r.json())
       .then(d => setDefaults({ water: d.water_liters, packs: d.battery_packs })).catch(() => {})
     fetch('/api/scenarios').then(r => r.json())
       .then(d => setScenarios(d.scenarios.map((s: any) => ({ id: s.id, label: s.label })))).catch(() => {})
+    return () => window.clearInterval(llmTimer)
   }, [])
 
   useEffect(() => {
@@ -99,8 +101,9 @@ export default function App() {
           <button className="primary" onClick={startMission} disabled={busy || (!!taskId && !['completed', 'rejected', 'error'].includes(phase))}>
             {taskId ? '重新开始' : '开始任务'}
           </button>
-          <span className={`llm-badge ${llm.connected ? 'on' : 'off'}`} title={llm.model ?? '未配置 FIREOPS_LLM_API_KEY'}>
-            {llm.connected ? `⚡ ${llm.model}` : '📴 离线规则'}
+          <span className={`llm-badge ${llm.connected ? (llm.degraded ? 'degraded' : 'on') : 'off'}`}
+                title={llm.degraded ? `连续失败: ${llm.last_error ?? ''}` : (llm.model ?? '未配置 FIREOPS_LLM_API_KEY')}>
+            {llm.degraded ? '⚠ GLM 降级·确定性模式' : llm.connected ? `⚡ ${llm.model}` : '📴 离线规则'}
           </span>
         </div>
       </header>

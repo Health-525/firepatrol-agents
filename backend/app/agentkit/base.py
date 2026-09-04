@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..domain.store import BOARD
 from .brain import AgentBrain
-from .llm import llm_status
+from .llm import audit_numbers, llm_status
 from .prompts import AGENT_PROMPTS
 
 
@@ -56,12 +56,17 @@ class BaseAgent:
             pass
 
     def say_llm(self, task_id: str, msg_type: str, to: str, text: str,
-                trace: List[Dict[str, Any]] | None = None) -> None:
-        """发布 GLM 研判消息, 附带模型与工具轨迹(前端渲染 🔧 调用链)。"""
+                trace: List[Dict[str, Any]] | None = None, brief: str = "") -> None:
+        """发布 GLM 研判消息, 附带模型与工具轨迹(前端渲染 🔧 调用链); brief 提供时做数字事后审计。"""
         data: Dict[str, Any] = {"llm": llm_status()["model"]}
         if trace:
             data["tools"] = [t["tool"] for t in trace]
             data["tool_detail"] = trace
+        if brief:
+            unknown = audit_numbers(text, brief)
+            if unknown:
+                data["audit_flag"] = unknown
+                text = f"{text}\n⚠ 数字审计:输出中的 {', '.join(unknown)} 未见于规则引擎数据,请以面板数字为准。"
         self.say(task_id, msg_type, to, f"💡 {text}", data)
 
     def profile(self) -> Dict[str, Any]:

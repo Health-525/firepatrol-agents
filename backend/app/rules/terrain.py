@@ -88,6 +88,16 @@ def _synthetic() -> List[List[float]]:
 
 @lru_cache(maxsize=1)
 def terrain_model() -> Dict:
+    # 优先读预提取的紧凑网格(47KB, 入库); 其次解析原始 HGT(26MB, 不入库); 最后合成地形
+    grid_path = ROOT / "data" / "terrain" / "grid.json"
+    if grid_path.exists():
+        try:
+            import json
+            model = json.loads(grid_path.read_text(encoding="utf-8"))
+            model["source"] = model.get("source", "srtm-n32e118(紫金山实测)") + " · grid.json"
+            return model
+        except (OSError, ValueError):
+            pass
     grid = _sample_hgt()
     source = "srtm-n32e118(紫金山实测)" if grid else "synthetic-fallback(合成地形)"
     if grid is None:

@@ -36,8 +36,31 @@ class SuppressionAgent(BaseAgent):
         pool.sort(key=lambda u: -u["soc"])
         limit = min(4, len(pool), max_drones or 4)
 
+        # ---- LLM 战术决策(真决策点): 出动规模策略, 输出改变候选生成; 失败回退全枚举 ----
+        sizes = list(range(1, limit + 1))
+        strategy_note = "全枚举(1–%d 架)" % limit if limit > 1 else "1 架"
+        if limit > 1:
+            inventory = state.get("inventory") or {}
+            strategy, trace = await self.think(
+                "你是灭火调度战术决策者。只回答出动规模策略, 格式必须是 'N-M'(如 2-3)或单个数字 'N'(1 到 %d 之间),"
+                "不要任何其他文字。判断依据: 火情紧迫度、资源节约、库存与换电周转。" % limit,
+                f"B={fire['total_flp']} FLP, 增长 {fire['growth_flp_per_hour']} FLP/h, 风 {fire['wind_speed']} m/s"
+                f"({fire['wind_band_label']}), 单架次有效能力 {cap['effective_flp']} FLP, 可用灭火机 {limit} 架,"
+                f"水剂库存 {inventory.get('water_liters', 0)}L/{inventory.get('water_modules_w20', 0)}模块,"
+                f"电池 {inventory.get('battery_packs', 0)} 组", max_tokens=40)
+            parsed = self._parse_sizes(strategy or "", limit)
+            if parsed:
+                sizes = parsed
+                strategy_note = f"LLM 决策:出动 {strategy.strip()} 架(候选 {'/'.join('C%d' % s for s in sizes)})"
+                self.say(task_id, "PLAN_PROPOSAL", "commander",
+                         f"🧠 战术决策:{strategy_note}。依据 B={fire['total_flp']}、风 {fire['wind_speed']} m/s、"
+                         f"单架次 {cap['effective_flp']} FLP 与库存周转。硬约束仍由规则引擎把关。",
+                         {"llm_decision": True, "sizes": sizes, "tools": [t['tool'] for t in trace] if trace else []})
+            else:
+                strategy_note = "LLM 不可用,回退全枚举(1–%d 架)" % limit
+
         candidates: List[Dict[str, Any]] = []
-        for size in range(1, limit + 1):
+        for size in sizes:
             combo = pool[:size]
             checks = []
             feasible = True
@@ -59,7 +82,8 @@ class SuppressionAgent(BaseAgent):
             veto = f"全部组合未过硬约束({'; '.join(veto_reasons)})," \
                    f"系统将输出资源缺口而不是虚假方案。"
         self.say(task_id, "PLAN_PROPOSAL", "commander",
-                 f"候选方案生成完毕:药剂 {module}(kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP),"
+                 f"候选方案生成完毕({strategy_note}):药剂 {module}(kappa={cap['kappa']},"
+                 f"单架次有效能力 {cap['effective_flp']} FLP),"
                  f"枚举 {len(candidates)} 个组合,过硬约束 {len(feasible_ids)} 个:{', '.join(feasible_ids) or '无'}。{veto}",
                  {"candidates": candidates, "capability": cap})
         self.think_bg(task_id, "PLAN_PROPOSAL", "commander",
@@ -70,13 +94,33 @@ class SuppressionAgent(BaseAgent):
         return {"candidates": candidates, "module": module, "capability": cap}
 
     @staticmethod
+    def _parse_sizes(text: str, limit: int) -> List[int]:
+        """解析 LLM 战略输出 'N-M' 或 'N' 为候选规模列表; 非法输入返回空(调用方回退)。"""
+        import re
+        text = text.strip()
+        match = re.search(r"(\d)\s*[-–~到至]\s*(\d)", text)
+        if match:
+            low, high = int(match.group(1)), int(match.group(2))
+        else:
+            single = re.search(r"(\d)", text)
+            if not single:
+                return []
+            low = high = int(single.group(1))
+        low, high = max(1, min(low, limit)), max(1, min(high, limit))
+        if low > high:
+            low, high = high, low
+        return list(range(low, high + 1))
+
+    @staticmethod
     def _check(uav: Dict[str, Any], module: str, fire: Dict[str, Any], center: Dict[str, float],
                battery_packs: int = 0) -> Dict[str, Any]:
         spray = R.sim_config()["spray"][module]
         dist = R.distance_m(uav["position"], center)
         out_min = R.flight_minutes(dist, uav["speed_mps"])
         loaded = spray["module_mass_kg"] > 0
-        rate_out = R.uav_mode_rate(uav, loaded=loaded)
+        # 去程爬升耗电(f_climb): 基地→火场高差 >30m 时速率上浮
+        rate_out = R.climb_adjusted_rate(R.uav_mode_rate(uav, loaded=loaded),
+                                         uav["position"]["x"], uav["position"]["y"], center["x"], center["y"])
         rate_back = R.uav_mode_rate(uav, loaded=False)
         soc_out = R.delta_soc(rate_out, out_min)
         soc_task = R.delta_soc(R.sim_config()["energy"]["suppression"]["hover_spray"], spray["minutes"])

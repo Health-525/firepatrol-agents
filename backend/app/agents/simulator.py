@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from ..agentkit.base import BaseAgent
 from ..domain.store import BOARD
 from ..rules import tools as R
+from ..rules.environment import observe_wind
 from ..rules.knowledge import query_knowledge
 
 RETURN_SOC = R.RETURN_SOC
@@ -169,13 +170,17 @@ class SimulatorAgent(BaseAgent):
                     uav["agent_remaining"] = quantity
                     uav["refills"] += 1
                     uav["status"] = "servicing"
-                    round_events.append(f"{uid} 基地补水 {quantity}L(4 min)")
+                    uav["position"] = dict(base)
+                    round_events.append(f"{uid} 基地补水 {quantity}L(4 min,本轮回合为补给轮)")
+                    continue  # 时间一致性: 一轮一事, 补给轮不出动
                 elif module == "co2_6kg" and inventory["co2_modules_c6"] >= 1:
                     inventory["co2_modules_c6"] -= 1
                     uav["agent_remaining"] = quantity
                     uav["refills"] += 1
                     uav["status"] = "servicing"
-                    round_events.append(f"{uid} 更换 CO₂ 模块(5 min)")
+                    uav["position"] = dict(base)
+                    round_events.append(f"{uid} 更换 CO₂ 模块(5 min,本轮回合为补给轮)")
+                    continue
                 else:
                     uav["status"] = "fault"
                     round_events.append(f"{uid} 药剂库存耗尽,停止出动")
@@ -185,7 +190,8 @@ class SimulatorAgent(BaseAgent):
                 if self._take_pack(inventory):
                     uav["soc"] = cfg["charging"]["battery_swap_soc"]
                     uav["swaps"] += 1
-                    round_events.append(f"{uid} 换电(5 min,SOC→95%)")
+                    round_events.append(f"{uid} 换电(5 min,SOC→95%,本轮回合为换电轮)")
+                    continue  # 一轮一事: 换电轮不出动
                 else:
                     uav["status"] = "returning"
                     round_events.append(f"{uid} SOC 不足且无备用电池,返航")
@@ -245,16 +251,19 @@ class SimulatorAgent(BaseAgent):
                     uav["status"] = "available"
                     uav["position"] = dict(base)
 
-        # --- 场景脚本: 风速突变
+        # --- 环境观测流: 每轮读取风速观测(非剧本), 观测到跳档才变更火情风况
         wind_speed = fire["wind_speed"]
-        shift = state["scenario_cfg"].get("wind_shift")
-        if shift and round_index == shift["round"]:
-            wind_speed = shift["to_mps"]
-            round_events.append(f"实测风速升至 {wind_speed} m/s(跳档)")
+        observed_wind, band_jump = observe_wind(state["scenario_cfg"], round_index, fire["wind_speed"])
+        if observed_wind != fire["wind_speed"]:
+            round_events.append(f"风速观测值 {observed_wind} m/s(当前 {fire['wind_speed']})")
+        if band_jump:
+            wind_speed = observed_wind
+            k_new = R.resolve_wind_band(observed_wind)["k_wind"]
+            k_old = R.resolve_wind_band(fire["wind_speed"])["k_wind"]
             for cell in fire["cells"]:
-                cell["flp"] = round(cell["flp"] * (R.resolve_wind_band(wind_speed)["k_wind"] / R.resolve_wind_band(fire["wind_speed"])["k_wind"]), 2)
-            band = R.resolve_wind_band(wind_speed)
-            fire["wind_speed"] = wind_speed
+                cell["flp"] = round(cell["flp"] * (k_new / k_old), 2)
+            band = R.resolve_wind_band(observed_wind)
+            fire["wind_speed"] = observed_wind
             fire["wind_band"] = band["band"]
             fire["wind_band_label"] = band["label"]
 
@@ -270,10 +279,10 @@ class SimulatorAgent(BaseAgent):
             cell["flp"] = round(max(0, cell["flp"] - suppression_flp * share), 3)
         fire["total_flp"] = round(sum(c["flp"] for c in fire["cells"]), 2)
 
-        # --- 触发判定(规则 10: 关键事件)
+        # --- 触发判定(规则 10: 关键事件, 由观测驱动)
         trigger = None
-        if shift and round_index == shift["round"]:
-            trigger = {"type": "wind_band_change", "detail": f"风速 {fire['wind_speed']} m/s 进入 {fire['wind_band_label']}",
+        if band_jump:
+            trigger = {"type": "wind_band_change", "detail": f"观测风速 {fire['wind_speed']} m/s 进入 {fire['wind_band_label']}",
                        "rule": "风速进入更高档位 → 强制重规划"}
         elif before > 0 and fire["total_flp"] > before * (1 + R.sim_config()["triggers"]["flp_growth_ratio"]):
             trigger = {"type": "flp_growth", "detail": f"火情负荷上升超过 20%", "rule": "FLP↑>20% → 强制重规划"}
@@ -346,7 +355,9 @@ class SimulatorAgent(BaseAgent):
     def _sortie_soc(uav: Dict[str, Any], spray: Dict[str, Any], center: Dict[str, float]) -> float:
         dist = R.distance_m(uav["position"], center)
         out_min = R.flight_minutes(dist, uav["speed_mps"])
-        rate_out = R.uav_mode_rate(uav, loaded=True)
+        # 去程爬升耗电(f_climb): 高差 >30m 的航段速率上浮(地形数据接入能耗)
+        rate_out = R.climb_adjusted_rate(R.uav_mode_rate(uav, loaded=True),
+                                         uav["position"]["x"], uav["position"]["y"], center["x"], center["y"])
         rate_back = R.uav_mode_rate(uav, loaded=False)
         hover = R.sim_config()["energy"]["suppression"]["hover_spray"]
         return R.delta_soc(rate_out, out_min) + R.delta_soc(hover, spray["minutes"]) + R.delta_soc(rate_back, out_min)

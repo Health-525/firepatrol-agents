@@ -23,14 +23,49 @@ def llm_available() -> bool:
     return bool(_cfg()[1])
 
 
+# 连续失败跟踪(GLM 限流/断连时前端告警)
+_fail_streak = 0
+_last_error: str | None = None
+
+
+def _record_success() -> None:
+    global _fail_streak, _last_error
+    _fail_streak, _last_error = 0, None
+
+
+def _record_failure(reason: str) -> None:
+    global _fail_streak, _last_error
+    _fail_streak += 1
+    _last_error = reason[:120]
+
+
 def llm_status() -> dict:
     base, key, model = _cfg()
     return {"connected": bool(key), "model": model if key else None,
-            "provider": "zhipu-bigmodel-coding-plan" if key else "offline-deterministic", "base_url": base if key else None}
+            "provider": "zhipu-bigmodel-coding-plan" if key else "offline-deterministic", "base_url": base if key else None,
+            "degraded": _fail_streak >= 2, "fail_streak": _fail_streak, "last_error": _last_error}
+
+
+import re as _re
+
+
+def audit_numbers(text: str, brief: str) -> list[str]:
+    """GLM 数字事后审计: 输出中出现但输入数据里不存在的数字(护栏, 不阻断只标注)。"""
+    if not text:
+        return []
+    allowed = {n for n in _re.findall(r"\d+(?:\.\d+)?", brief)}
+    found = _re.findall(r"\d+(?:\.\d+)?", text)
+    unknown = []
+    for n in found:
+        if n in allowed or float(n) in {float(a) for a in allowed}:
+            continue
+        if n not in unknown:
+            unknown.append(n)
+    return unknown[:6]
 
 
 async def _post_chat(body: dict, timeout: float) -> dict | None:
-    """底层 HTTP 调用, 失败返回 None。"""
+    """底层 HTTP 调用, 失败返回 None; 连续失败计入降级跟踪。"""
     base, key, _ = _cfg()
     if not key:
         return None
@@ -42,8 +77,11 @@ async def _post_chat(body: dict, timeout: float) -> dict | None:
                                          headers={"Content-Type": "application/json",
                                                   "Authorization": f"Bearer {key}"})
             response.raise_for_status()
-            return response.json()
-    except Exception:
+            payload = response.json()
+        _record_success()
+        return payload
+    except Exception as error:
+        _record_failure(f"{type(error).__name__}: {error}")
         return None
 
 

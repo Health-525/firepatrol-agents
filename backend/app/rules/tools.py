@@ -138,6 +138,17 @@ def flight_minutes(dist_m: float, speed_mps: float) -> float:
     return dist_m / max(speed_mps, 0.1) / 60.0
 
 
+def climb_adjusted_rate(base_rate: float, from_x: float, from_y: float, to_x: float, to_y: float) -> float:
+    """爬升耗电(规则 4.1 f_climb): 航段爬升超过 30m 时该段速率 +10%。地形数据缺失则不修正。"""
+    try:
+        from .terrain import elevation_at
+        if elevation_at(to_x, to_y) - elevation_at(from_x, from_y) > 30:
+            return base_rate * (1 + sim_config()["energy_correction"]["climb"])
+    except Exception:
+        pass
+    return base_rate
+
+
 def charge_soc(soc: float, minutes: float, mode: str = "base") -> float:
     rate = sim_config()["charging"]["forward_soc_per_hour"] if mode == "forward" else sim_config()["charging"]["base_soc_per_hour"]
     return round(min(100.0, soc + rate * minutes / 60.0), 2)
@@ -243,22 +254,23 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
     for uav in uavs:
         dist = distance_m(uav["position"], fire_pos)
         out_min = flight_minutes(dist, uav["speed_mps"])
-        back_min = flight_minutes(dist, uav["speed_mps"])
-        loaded_mass = spray["module_mass_kg"]
-        rate_out = uav_mode_rate(uav, loaded=True)
+        # 去程满载; 若航段爬升超过 30m(如基地105m→火场195m), 按 f_climb 上浮去程速率
+        rate_out = climb_adjusted_rate(uav_mode_rate(uav, loaded=True),
+                                       uav["position"]["x"], uav["position"]["y"], fire_pos["x"], fire_pos["y"])
         rate_back = uav_mode_rate(uav, loaded=False)
         soc_out = delta_soc(rate_out, out_min)
         soc_task = delta_soc(cfg["energy"]["suppression"]["hover_spray"], spray_minutes)
-        soc_back = delta_soc(rate_back, back_min)
+        soc_back = delta_soc(rate_back, out_min)
         drones.append({"uav_id": uav["uav_id"], "soc": float(uav["soc"]), "agent": min(quantity, float(uav.get("agent_remaining", quantity))),
                        "sortie_soc": round(soc_out + soc_task + soc_back, 2), "out_minutes": out_min,
+                       "sortie_minutes": round(2 * out_min + spray_minutes, 1),
                        "sorties": 0, "swaps": 0, "refills": 0, "state": "ready", "soc_cost_total": 0.0})
     if not drones:
         return {"controlled": False, "control_minutes": None, "rounds_used": 0, "residual_flp": round(fire_flp, 2),
                 "material_used": 0, "swaps": 0, "refills": 0, "stalled": "no_uav", "energy_total": 0.0, "per_uav": []}
 
     load = max(0.0, float(fire_flp))
-    rounds_used, material_used, extra_min, energy_total = 0, 0.0, 0.0, 0.0
+    rounds_used, material_used, energy_total = 0, 0.0, 0.0
     stalled = None
     while load > 0.01 and rounds_used < max_rounds:
         rounds_used += 1
@@ -266,16 +278,19 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
         for d in drones:
             if d["state"] != "ready" or load <= 0:
                 continue
+            # 时间一致性: 一轮一事 —— 补给轮/换电轮不出动, 与执行器口径一致
             if d["agent"] < quantity:
                 if water_left >= 1:
-                    water_left -= 1; d["agent"] = quantity; d["refills"] += 1; extra_min += refill
+                    water_left -= 1; d["agent"] = quantity; d["refills"] += 1
                 else:
                     d["state"] = "out_of_agent"; stalled = stalled or "agent_insufficient"; continue
+                continue
             if d["soc"] - d["sortie_soc"] < RETURN_SOC:
                 if packs_left >= 1:
-                    packs_left -= 1; d["soc"] = swap["soc_after"]; d["swaps"] += 1; extra_min += swap["minutes"]
+                    packs_left -= 1; d["soc"] = swap["soc_after"]; d["swaps"] += 1
                 else:
                     d["state"] = "out_of_energy"; stalled = stalled or "soc_below_return"; continue
+                continue
             d["soc"] = round(d["soc"] - d["sortie_soc"], 2)
             d["soc_cost_total"] += d["sortie_soc"]
             energy_total += d["sortie_soc"]
@@ -286,9 +301,11 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
         load = max(0.0, load + growth_per_round - suppression)
         if load > 0 and all(d["state"] != "ready" for d in drones):
             break
-    overhead = 2 * max((d["out_minutes"] for d in drones), default=0.0)
     controlled = load <= 0.01
-    control_minutes = round(rounds_used * round_minutes + overhead + extra_min, 1) if controlled else None
+    # 墙钟估计: 多机并行, 取最慢无人机 —— 首架次 11 分钟量级, 后续每周期(补给+换电+架次)约 20 分钟(规则 11.3 口径)
+    cycle = round(refill + swap["minutes"] + (drones[0]["sortie_minutes"] if drones else 11), 1)
+    slowest_cycles = max(d["sorties"] for d in drones) if drones else 0
+    control_minutes = round((drones[0]["sortie_minutes"] if drones else 0) + max(0, slowest_cycles - 1) * cycle, 1) if controlled else None
     return {"controlled": controlled, "control_minutes": control_minutes, "rounds_used": rounds_used,
             "residual_flp": round(load, 2), "suppression_per_sortie": eff, "material_used": round(material_used, 1),
             "swaps": sum(d["swaps"] for d in drones), "refills": sum(d["refills"] for d in drones),

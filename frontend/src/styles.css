@@ -303,6 +303,8 @@ ul.kv li.gap b { color: var(--danger); }
 .llm-tag.off { color: var(--muted); border: 1px solid var(--line); }
 .llm-badge { font-size: 11px; padding: 5px 10px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
 .llm-badge.on { color: #cabdf2; border: 1px solid #7c6bb3; background: #1c1730; }
+.llm-badge.degraded { color: #ffb3a0; border: 1px solid #e07856; background: #2a1410; animation: blink 1.4s infinite; }
+@keyframes blink { 50% { opacity: 0.5; } }
 .llm-badge.off { color: var(--muted); border: 1px solid var(--line); }
 .chat-history { max-height: 230px; min-height: 80px; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .bubble { padding: 8px 12px; border-radius: 11px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; animation: msgin 0.25s ease-out; }

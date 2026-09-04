@@ -16,7 +16,7 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "fire_type": "vegetation",
         "wind_shift": None,
     },
-    # 风速突变: 第 3 轮风起 6.8 m/s → 风档跳档 + FLP 抬升 → 触发重规划演示
+    # 风速突变: 外生观测序列(第 3 轮起观测到 6.8+ m/s) → 跳档检测 → 触发重规划
     "wind_shift": {
         "label": "风速突变 · 重规划演示",
         "fire_cells": [{"cx": 14, "cy": 9, "intensity": 3}, {"cx": 15, "cy": 9, "intensity": 3},
@@ -26,7 +26,7 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "people_status": "confirmed",
         "wind_speed": 5.2,
         "fire_type": "vegetation",
-        "wind_shift": {"round": 3, "to_mps": 6.8},
+        "wind_series": {"3": 6.8, "4": 7.0, "5": 7.1},
     },
     # 无人场景: 支援双机全走物流分支
     "no_people": {

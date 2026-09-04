@@ -9,3 +9,4 @@ reports/
 .DS_Store
 .env
 *.tsbuildinfo
+data/terrain/*.hgt

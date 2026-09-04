@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from . import config  # noqa: F401  # 加载 .env(GLM 密钥, 不入库), 必须先于其他模块
 from .agents import AGENTS
-from .agentkit.llm import SAFETY_RULE, glm_chat, llm_status
+from .agentkit.llm import SAFETY_RULE, audit_numbers, glm_chat, llm_status
 from .domain import scenarios
 from .domain.store import BOARD
 from .rules import knowledge
@@ -102,9 +102,14 @@ async def mission_chat(task_id: str, payload: ChatQuestion):
     if not answer:
         answer = (f"(GLM 未接入, 确定性回答)当前阶段 {BOARD.snapshot(task_id)['phase']}。"
                   + brief.replace("\n", "; "))
+    # 数字事后审计: GLM 回答中出现但黑板数据里不存在的数字 → 标注提醒
+    unknown = audit_numbers(answer, brief + knowledge_text)
+    if unknown:
+        answer = f"{answer}\n⚠ 数字审计:{', '.join(unknown)} 未见于实时数据,请以面板数字为准。"
     message = BOARD.post_message(task_id, "AGENT_REPLY", "commander", "human", answer,
-                                 {"llm": llm_status()["model"] if answer else None, "grounded": "blackboard+knowledge"})
-    return {"answer": answer, "message": message.model_dump(), "llm": llm_status()}
+                                 {"llm": llm_status()["model"] if answer else None, "grounded": "blackboard+knowledge",
+                                  "audit_flag": unknown or None})
+    return {"answer": answer, "message": message.model_dump(), "llm": llm_status(), "audit": unknown}
 
 
 @app.get("/api/health")
