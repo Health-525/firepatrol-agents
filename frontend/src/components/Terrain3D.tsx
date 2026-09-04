@@ -26,6 +26,308 @@ function toWorld(terrain: TerrainModel, x: number, y: number): [number, number] 
   return [x - terrain.scene_w / 2, y - terrain.scene_h / 2]
 }
 
+// ---------- 地面路线(消防车沿巡护道行驶) ----------
+// 消防车配置(编号 / 道路侧向偏移 / 车速)与出动阶段: 审批通过进入执行后前出
+const TRUCK_CFG = [
+  { id: 'truck-01', label: '消防01', side: 11, speed: 0.42 },
+  { id: 'truck-02', label: '消防02', side: -11, speed: 0.30 },
+] as const
+const truckPhases = ['executing', 'replanning', 'completed']
+interface RoutePt { x: number; y: number; z: number; c: number }
+interface TruckRoute { pts: RoutePt[]; total: number }
+function buildTruckRoute(terrain: TerrainModel, polyline: number[][]): TruckRoute {
+  const pts: RoutePt[] = polyline.map(([x, y]) => {
+    const [wx, wz] = toWorld(terrain, x, y)
+    return { x: wx, y: elev(terrain, x, y) * EX, z: wz, c: 0 }
+  })
+  let acc = 0
+  for (let i = 0; i < pts.length; i++) {
+    pts[i].c = acc
+    if (i < pts.length - 1) acc += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z)
+  }
+  return { pts, total: acc }
+}
+function routeAt(route: TruckRoute, d: number) {
+  const dist = Math.max(0, Math.min(d, route.total))
+  for (let i = 0; i < route.pts.length - 1; i++) {
+    const a = route.pts[i], b = route.pts[i + 1]
+    const seg = b.c - a.c
+    if (dist <= b.c || i === route.pts.length - 2) {
+      const t = seg > 0 ? Math.max(0, (dist - a.c) / seg) : 0
+      return {
+        x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t,
+        dx: (b.x - a.x) / (seg || 1), dz: (b.z - a.z) / (seg || 1),
+      }
+    }
+  }
+  const last = route.pts[route.pts.length - 1]
+  return { x: last.x, y: last.y, z: last.z, dx: 0, dz: 1 }
+}
+
+// ---------- 四旋翼无人机建模(机身 + 桨盘 + 航行灯 + 子群专属挂载) ----------
+function buildDrone(color: string, subgroup: string): { group: THREE.Group; rotors: THREE.Object3D[]; spray: THREE.Mesh | null } {
+  const group = new THREE.Group()
+  const matAir = new THREE.MeshStandardMaterial({ color: '#3a4450', roughness: 0.42, metalness: 0.45 })
+  const matDark = new THREE.MeshStandardMaterial({ color: '#171c22', roughness: 0.55, metalness: 0.3 })
+  const matAccent = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.35 })
+  const matGlass = new THREE.MeshStandardMaterial({ color: '#0d141c', emissive: color, emissiveIntensity: 0.3, roughness: 0.15, metalness: 0.65 })
+  // 机身: 主舱 + 座舱穹顶 + 腹板 + 尾鳍
+  group.add(new THREE.Mesh(new THREE.BoxGeometry(13, 5, 17), matAir))
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(5.2, 18, 12), matGlass)
+  canopy.scale.set(1.05, 0.48, 1.32)
+  canopy.position.y = 2.6
+  group.add(canopy)
+  const belly = new THREE.Mesh(new THREE.BoxGeometry(11, 1.5, 13), matDark)
+  belly.position.y = -3.1
+  group.add(belly)
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.6, 3.2), matAir)
+  fin.position.set(0, 3.2, -8.6)
+  group.add(fin)
+  // 机首传感舱 + 光电镜头
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(3, 4.1, 4, 14), matAir)
+  nose.rotation.x = Math.PI / 2
+  nose.position.set(0, 0, 9.6)
+  group.add(nose)
+  const lens = new THREE.Mesh(new THREE.SphereGeometry(1.5, 12, 10),
+    new THREE.MeshStandardMaterial({ color: '#67e8f9', emissive: '#67e8f9', emissiveIntensity: 1.6, roughness: 0.1 }))
+  lens.position.set(0, 0, 11.6)
+  group.add(lens)
+  // 机臂 + 电机舱 + 双叶桨(带桨盘光晕)
+  const rotors: THREE.Object3D[] = []
+  const matDisc = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.15, side: THREE.DoubleSide, depthWrite: false })
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 12.5), matAir)
+    arm.position.set(dx * 4.6, 0.9, dz * 4.6)
+    arm.rotation.y = Math.atan2(dx, dz)
+    group.add(arm)
+    const pod = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 2.1, 2.6, 12), matDark)
+    pod.position.set(dx * 8.8, 1.5, dz * 8.8)
+    group.add(pod)
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(2.05, 2.05, 0.5, 12), matAccent)
+    ring.position.set(dx * 8.8, 2.9, dz * 8.8)
+    group.add(ring)
+    const prop = new THREE.Group()
+    prop.position.set(dx * 8.8, 3.7, dz * 8.8)
+    prop.add(new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 1, 8), matAccent))
+    prop.add(new THREE.Mesh(new THREE.BoxGeometry(12.4, 0.22, 1.15), matDark))
+    prop.add(new THREE.Mesh(new THREE.CylinderGeometry(6.3, 6.3, 0.05, 24), matDisc))
+    group.add(prop)
+    rotors.push(prop)
+  }
+  // 航行灯: 左红右绿 + 尾部白色频闪
+  const navRed = new THREE.Mesh(new THREE.SphereGeometry(0.95, 8, 6),
+    new THREE.MeshStandardMaterial({ color: '#ff3b30', emissive: '#ff3b30', emissiveIntensity: 2.2 }))
+  navRed.position.set(-8.8, 3, 8.8)
+  group.add(navRed)
+  const navGreen = new THREE.Mesh(new THREE.SphereGeometry(0.95, 8, 6),
+    new THREE.MeshStandardMaterial({ color: '#30ff5a', emissive: '#30ff5a', emissiveIntensity: 2.2 }))
+  navGreen.position.set(8.8, 3, 8.8)
+  group.add(navGreen)
+  const strobe = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 6),
+    new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 2.6 }))
+  strobe.position.set(0, 4.4, -9.4)
+  group.add(strobe)
+  // 起落橇
+  for (const sx of [-5.6, 5.6]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 15), matDark)
+    rail.position.set(sx, -5.6, 0)
+    group.add(rail)
+    for (const sz of [-4.5, 4.5]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.7, 2.8, 0.7), matDark)
+      strut.position.set(sx, -4, sz)
+      group.add(strut)
+    }
+  }
+  // 子群专属挂载(造型区分: 侦察=光电吊舱 / 灭火=水剂箱+喷洒 / 支援=补给货舱)
+  let spray: THREE.Mesh | null = null
+  if (subgroup === 'reconnaissance') {
+    const gimbal = new THREE.Group()
+    gimbal.position.set(0, -4.2, 5.2)
+    gimbal.add(new THREE.Mesh(new THREE.BoxGeometry(4.6, 1, 1.4), matAir))
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(2.5, 14, 10), matDark)
+    ball.position.y = -2
+    gimbal.add(ball)
+    const cam = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1.6, 10),
+      new THREE.MeshStandardMaterial({ color: '#67e8f9', emissive: '#67e8f9', emissiveIntensity: 1.2 }))
+    cam.rotation.x = Math.PI / 2
+    cam.position.set(0, -2, 1.9)
+    gimbal.add(cam)
+    group.add(gimbal)
+  } else if (subgroup === 'suppression') {
+    const tank = new THREE.Mesh(new THREE.BoxGeometry(8.6, 3.8, 11),
+      new THREE.MeshStandardMaterial({ color: '#d92b2b', roughness: 0.4, metalness: 0.25 }))
+    tank.position.set(0, -4.6, -0.5)
+    group.add(tank)
+    for (const cz of [3, -4]) {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(8.8, 0.8, 1), matDark)
+      strap.position.set(0, -4.6, cz)
+      group.add(strap)
+    }
+    const nozzle = new THREE.Mesh(new THREE.ConeGeometry(1.7, 3, 10), matDark)
+    nozzle.rotation.x = Math.PI
+    nozzle.position.set(0, -7.4, -0.5)
+    group.add(nozzle)
+    spray = new THREE.Mesh(new THREE.ConeGeometry(5, 16, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: '#9fd8ff', transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }))
+    spray.position.set(0, -16, -0.5)
+    spray.visible = false
+    group.add(spray)
+  } else {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(8.6, 3.6, 11),
+      new THREE.MeshStandardMaterial({ color: '#4d5d3a', roughness: 0.7 }))
+    crate.position.set(0, -4.5, -0.5)
+    group.add(crate)
+    for (const cz of [2.5, -3.5]) {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(8.8, 0.7, 1), matAccent)
+      strap.position.set(0, -4.5, cz)
+      group.add(strap)
+    }
+  }
+  return { group, rotors, spray }
+}
+
+// ---------- 消防车建模(水罐车: 驾驶室 + 水罐 + 折叠梯 + 水炮 + 警灯 + 车轮) ----------
+function buildTruck(label: string): { group: THREE.Group; meta: Record<string, any> } {
+  const group = new THREE.Group()
+  const matRed = new THREE.MeshStandardMaterial({ color: '#c42025', roughness: 0.35, metalness: 0.25 })
+  const matWhite = new THREE.MeshStandardMaterial({ color: '#e9edf0', roughness: 0.5 })
+  const matDark = new THREE.MeshStandardMaterial({ color: '#14181d', roughness: 0.6 })
+  const matSteel = new THREE.MeshStandardMaterial({ color: '#aab4bd', roughness: 0.28, metalness: 0.85 })
+  const matGlass = new THREE.MeshStandardMaterial({ color: '#0e161f', roughness: 0.12, metalness: 0.7 })
+  // 底盘 + 保险杠
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(7.6, 1.6, 24), matDark)
+  chassis.position.set(0, 2.6, 1)
+  group.add(chassis)
+  const bumper = new THREE.Mesh(new THREE.BoxGeometry(9.8, 2.4, 1.6), matWhite)
+  bumper.position.set(0, 3.2, 13.6)
+  group.add(bumper)
+  // 驾驶室 + 挡风玻璃 + 大灯
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(9.2, 6.6, 8.4), matRed)
+  cab.position.set(0, 6.2, 8.8)
+  group.add(cab)
+  const windshield = new THREE.Mesh(new THREE.BoxGeometry(8.4, 3.2, 0.7), matGlass)
+  windshield.position.set(0, 7.6, 13.05)
+  group.add(windshield)
+  const headMats: THREE.MeshStandardMaterial[] = []
+  for (const hx of [-3.2, 3.2]) {
+    const mat = new THREE.MeshStandardMaterial({ color: '#fff3cc', emissive: '#ffe9a8', emissiveIntensity: 1.6 })
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.1, 0.6), mat)
+    hl.position.set(hx, 4.6, 13.4)
+    group.add(hl)
+    headMats.push(mat)
+  }
+  // 水罐体 + 白色环带 + 不锈钢罐顶
+  const tank = new THREE.Mesh(new THREE.BoxGeometry(9.6, 7.6, 14.6), matRed)
+  tank.position.set(0, 6.8, -4.6)
+  group.add(tank)
+  const band = new THREE.Mesh(new THREE.BoxGeometry(9.8, 1.5, 14.7), matWhite)
+  band.position.set(0, 5.1, -4.6)
+  group.add(band)
+  const tankTop = new THREE.Mesh(new THREE.BoxGeometry(8.2, 1, 13), matSteel)
+  tankTop.position.set(0, 10.9, -4.6)
+  group.add(tankTop)
+  // 两侧水带卷盘
+  for (const rx of [-5.1, 5.1]) {
+    const reel = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 1.2, 14), matWhite)
+    reel.rotation.z = Math.PI / 2
+    reel.position.set(rx, 8.2, 2.2)
+    group.add(reel)
+  }
+  // 罐顶折叠梯
+  for (const lx of [-1.5, 1.5]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 13.5), matSteel)
+    rail.position.set(lx, 11.7, -4.8)
+    group.add(rail)
+  }
+  for (let k = 0; k < 6; k++) {
+    const rung = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.35, 0.5), matSteel)
+    rung.position.set(0, 11.7, -10.5 + k * 2.3)
+    group.add(rung)
+  }
+  // 水炮: 方位云台 + 俯仰炮管(炮口锚点用于挂水柱)
+  const turretBase = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.8, 1.4, 12), matDark)
+  turretBase.position.set(0, 11.6, 1.8)
+  group.add(turretBase)
+  const cannonYaw = new THREE.Group()
+  cannonYaw.position.set(0, 12.4, 1.8)
+  group.add(cannonYaw)
+  const barrel = new THREE.Group()
+  const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.85, 6.4, 10), matSteel)
+  pipe.rotation.x = Math.PI / 2
+  pipe.position.z = 3.2
+  barrel.add(pipe)
+  const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 0.85, 1, 10), matDark)
+  muzzle.rotation.x = Math.PI / 2
+  muzzle.position.z = 6.4
+  barrel.add(muzzle)
+  const barrelTip = new THREE.Object3D()
+  barrelTip.position.set(0, 0, 7)
+  barrel.add(barrelTip)
+  barrel.rotation.x = -0.55
+  cannonYaw.add(barrel)
+  // 车顶警灯排(红蓝爆闪)
+  const lightBase = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.9, 2.4), matDark)
+  lightBase.position.set(0, 9.95, 8.8)
+  group.add(lightBase)
+  const lampR = new THREE.MeshStandardMaterial({ color: '#3a0508', emissive: '#ff2d2d', emissiveIntensity: 0.15 })
+  const lampB = new THREE.MeshStandardMaterial({ color: '#050a2a', emissive: '#2d6bff', emissiveIntensity: 2.6 })
+  const lampRm = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.3, 2), lampR)
+  lampRm.position.set(-1.9, 11, 8.8)
+  group.add(lampRm)
+  const lampBm = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.3, 2), lampB)
+  lampBm.position.set(1.9, 11, 8.8)
+  group.add(lampBm)
+  // 排烟管
+  const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 3, 8), matSteel)
+  stack.position.set(-3.2, 10.9, 3.6)
+  group.add(stack)
+  // 车轮 ×6(双后桥)
+  const wheels: THREE.Mesh[] = []
+  const wheelGeo = new THREE.CylinderGeometry(2.35, 2.35, 1.8, 16)
+  wheelGeo.rotateZ(Math.PI / 2)
+  const hubGeo = new THREE.CylinderGeometry(1.05, 1.05, 1.9, 10)
+  hubGeo.rotateZ(Math.PI / 2)
+  for (const wz of [8.6, -4.4, -9.9]) {
+    for (const wx of [-4.7, 4.7]) {
+      const wheel = new THREE.Mesh(wheelGeo, matDark)
+      wheel.position.set(wx, 2.35, wz)
+      wheel.add(new THREE.Mesh(hubGeo, matSteel))
+      group.add(wheel)
+      wheels.push(wheel)
+    }
+  }
+  const tag = textSprite(label, '#ff8a7a', 0.5)
+  tag.position.set(0, 24, 0)
+  group.add(tag)
+  const meta: Record<string, any> = { truck: true, wheels, lampR, lampB, headMats, cannonYaw, barrel, barrelTip, cannonTarget: 0 }
+  return { group, meta }
+}
+
+// ---------- 水柱(抛物线水舌 + 落水涟漪) ----------
+function buildWaterJet(from: THREE.Vector3, to: THREE.Vector3): THREE.Group {
+  const jet = new THREE.Group()
+  const mid = from.clone().lerp(to, 0.45)
+  mid.y += from.distanceTo(to) * 0.2 + 10
+  const curve = new THREE.QuadraticBezierCurve3(from, mid, to)
+  jet.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.9, 6),
+    new THREE.MeshBasicMaterial({ color: '#7cc7ff', transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false })))
+  jet.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 2, 6),
+    new THREE.MeshBasicMaterial({ color: '#3f9fe0', transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false })))
+  const splash = new THREE.Mesh(new THREE.CircleGeometry(7, 24),
+    new THREE.MeshBasicMaterial({ color: '#a5dcff', transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }))
+  splash.rotation.x = -Math.PI / 2
+  splash.position.copy(to)
+  jet.add(splash)
+  const ripple = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 32),
+    new THREE.MeshBasicMaterial({ color: '#a5dcff', transparent: true, opacity: 0.4, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }))
+  ripple.rotation.x = -Math.PI / 2
+  ripple.position.copy(to).setY(to.y + 2)
+  ripple.userData = { ripple: true, seed: Math.random() }
+  jet.add(ripple)
+  jet.userData = { jet: true }
+  return jet
+}
+
 // ---------- 程序化纹理 ----------
 function radialTexture(inner: string, outer: string, size = 128): THREE.Texture {
   const canvas = document.createElement('canvas')
@@ -76,6 +378,7 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
     world: THREE.Group
     dynamic: THREE.Group
   } | null>(null)
+  const truckTaskRef = useRef<string>('')
 
   // ---------- 初始化 ----------
   useEffect(() => {
@@ -161,14 +464,35 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
             ;(child as THREE.PointLight).intensity = 4.2 + 1.6 * Math.sin(ts / 90 + meta.seed) * Math.cos(ts / 230)
           }
           if (meta.rotors && Array.isArray(meta.rotors)) {
-            for (const rotor of meta.rotors) rotor.rotation.y += 0.55
+            for (const rotor of meta.rotors) rotor.rotation.y += 0.85
           }
           if (meta.drone && meta.target) {
             meta.cur.x += (meta.target.x - meta.cur.x) * 0.06
             meta.cur.y += (meta.target.y - meta.cur.y) * 0.06
             meta.cur.z += (meta.target.z - meta.cur.z) * 0.06
-            child.position.set(meta.cur.x, meta.cur.y, meta.cur.z)
+            // 悬停微沉浮, 避免滞空感
+            child.position.set(meta.cur.x, meta.cur.y + Math.sin(ts / 850 + (meta.seed || 0) * 9) * 2.2, meta.cur.z)
             if (meta.beacon) meta.beacon.position.set(meta.cur.x, meta.groundY + 4, meta.cur.z)
+            if (meta.line) {
+              const lg = (meta.line as THREE.Line).geometry.attributes.position as THREE.BufferAttribute
+              lg.setXYZ(0, meta.cur.x, child.position.y, meta.cur.z)
+              lg.setXYZ(1, meta.cur.x, meta.groundY, meta.cur.z)
+              lg.needsUpdate = true
+            }
+          }
+          if (meta.truck) {
+            meta.dist = Math.min(meta.dist + meta.speed, meta.route.total)
+            const at = routeAt(meta.route as TruckRoute, meta.dist)
+            child.position.set(at.x - at.dz * meta.side, at.y, at.z + at.dx * meta.side)
+            child.rotation.y = Math.atan2(at.dx, at.dz)
+            const moving = meta.dist < meta.route.total - 0.5
+            if (moving) for (const wheel of meta.wheels) wheel.rotation.x += 0.28
+            const flash = Math.sin(ts / 125)
+            meta.lampR.emissiveIntensity = flash > 0 ? 2.6 : 0.15
+            meta.lampB.emissiveIntensity = flash > 0 ? 0.15 : 2.6
+            for (const hm of meta.headMats) hm.emissiveIntensity = 1.4 + 0.35 * Math.sin(ts / 95)
+            // 水炮缓动转向目标方位
+            meta.cannonYaw.rotation.y += (meta.cannonTarget - meta.cannonYaw.rotation.y) * 0.05
           }
           if (meta.ripple) {
             const cycle = ((ts / 2600) + meta.seed) % 1
@@ -446,26 +770,9 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
       const groundY = elev(terrain, uav.position.x, uav.position.y) * EX
       const alt = groundY + 60 * EX + (uav.position.z || 0) * 0.6
       if (!group) {
-        group = new THREE.Group()
+        const built = buildDrone(meta.color, uav.subgroup)
+        group = built.group
         group.name = name
-        const mat = new THREE.MeshStandardMaterial({ color: meta.color, emissive: meta.color, emissiveIntensity: 0.35, roughness: 0.4 })
-        const body = new THREE.Mesh(new THREE.BoxGeometry(11, 5, 15), mat)
-        group.add(body)
-        const nose = new THREE.Mesh(new THREE.BoxGeometry(5, 4, 5), new THREE.MeshStandardMaterial({ color: '#e8f2ec', emissive: '#ffffff', emissiveIntensity: 0.25 }))
-        nose.position.z = 9
-        group.add(nose)
-        const rotorMat = new THREE.MeshStandardMaterial({ color: meta.color, transparent: true, opacity: 0.4 })
-        const rotors: THREE.Mesh[] = []
-        for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
-          const arm = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 11), mat)
-          arm.position.set(dx * 4.5, 1.5, dz * 4.5)
-          arm.rotation.y = Math.atan2(dx, dz)
-          group.add(arm)
-          const rotor = new THREE.Mesh(new THREE.CylinderGeometry(6.5, 6.5, 0.7, 20), rotorMat)
-          rotor.position.set(dx * 8.5, 2.6, dz * 8.5)
-          group.add(rotor)
-          rotors.push(rotor)
-        }
         // 地面光标(垂线落点)
         const beacon = new THREE.Mesh(new THREE.CircleGeometry(10, 22),
           new THREE.MeshBasicMaterial({ color: meta.color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }))
@@ -478,13 +785,14 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
         const tag = textSprite(uav.uav_id, meta.color, 0.55)
         tag.position.y = 26
         group.add(tag)
-        group.userData = { drone: true, cur: { x: wx, y: alt, z: wz }, groundY, rotors, beacon, line }
+        group.userData = { drone: true, cur: { x: wx, y: alt, z: wz }, groundY, rotors: built.rotors, spray: built.spray, beacon, line, seed: Math.random() }
         group.position.set(wx, alt, wz)
         core.dynamic.add(group)
       }
       const data = group.userData as Record<string, any>
       data.target = { x: wx, y: alt, z: wz }
       data.groundY = groundY
+      if (data.spray) data.spray.visible = uav.subgroup === 'suppression' && uav.status === 'working'
     }
     for (const child of [...core.dynamic.children]) {
       const data = child.userData as Record<string, any>
@@ -494,7 +802,85 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
         core.dynamic.remove(child)
       }
     }
-  }, [snapshot?.fire, snapshot?.fleet, terrain])
+
+    // ---------- 地面消防车: 审批通过进入执行后, 由基地沿巡护道前出 FSP-1 ----------
+    const removeJets = () => {
+      for (const child of [...core.dynamic.children]) {
+        if ((child.userData as Record<string, any>)?.jet) {
+          child.traverse(o => {
+            const mat = (o as THREE.Mesh).material as THREE.Material | undefined
+            mat?.dispose?.()
+          })
+          core.dynamic.remove(child)
+        }
+      }
+    }
+    const taskId = snapshot?.task_id ?? ''
+    if (truckTaskRef.current !== taskId) {
+      truckTaskRef.current = taskId
+      for (const child of [...core.dynamic.children]) {
+        if ((child.userData as Record<string, any>)?.truck) core.dynamic.remove(child)
+      }
+    }
+    // 执行中重规划会回到再审批: 只要已出动过(rounds>0), 消防车保持在前线不回收
+    const deployed = (snapshot?.rounds?.length ?? 0) > 0
+    const trucksActive = !!snapshot && (truckPhases.includes(snapshot.phase) ||
+      (snapshot.phase === 'awaiting_approval' && deployed))
+    if (!trucksActive) {
+      for (const child of [...core.dynamic.children]) {
+        if ((child.userData as Record<string, any>)?.truck) core.dynamic.remove(child)
+      }
+    }
+    const road = scene?.roads?.[0]
+    if (trucksActive && road && road.points.length >= 2 && scene) {
+      // 路线: 巡护道起点(基地) → FSP 所在折点, 终点回退 34m 避开补给台座
+      let fspIdx = road.points.findIndex(p => Math.hypot(p[0] - scene.forward_supply_point.x, p[1] - scene.forward_supply_point.y) < 40)
+      if (fspIdx < 1) fspIdx = road.points.length - 1
+      const route = buildTruckRoute(terrain, road.points.slice(0, fspIdx + 1))
+      const stopRoute: TruckRoute = { pts: route.pts, total: Math.max(0, route.total - 34) }
+      for (const cfg of TRUCK_CFG) {
+        let truck = core.dynamic.getObjectByName(cfg.id) as THREE.Group | undefined
+        if (!truck) {
+          const built = buildTruck(cfg.label)
+          truck = built.group
+          truck.name = cfg.id
+          built.meta.route = stopRoute
+          built.meta.dist = cfg.id === 'truck-01' ? 0 : -340
+          built.meta.speed = cfg.speed
+          built.meta.side = cfg.side
+          truck.userData = built.meta
+          const at = routeAt(stopRoute, 0)
+          truck.position.set(at.x - at.dz * cfg.side, at.y, at.z + at.dx * cfg.side)
+          truck.rotation.y = Math.atan2(at.dx, at.dz)
+          core.dynamic.add(truck)
+        }
+      }
+      // 水炮瞄准与水柱: 消防车到位且火仍在烧时, 向火场中心喷射
+      removeJets()
+      const burning = (snapshot?.fire?.cells ?? []).filter(c => c.flp > 0.01)
+      const firing = snapshot?.phase === 'executing' || snapshot?.phase === 'replanning' ||
+        (snapshot?.phase === 'awaiting_approval' && deployed)
+      if (burning.length && firing) {
+        const fx = burning.reduce((s, c) => s + c.x, 0) / burning.length
+        const fy = burning.reduce((s, c) => s + c.y, 0) / burning.length
+        const [fwx, fwz] = toWorld(terrain, fx, fy)
+        const target = new THREE.Vector3(fwx, elev(terrain, fx, fy) * EX + 6, fwz)
+        for (const cfg of TRUCK_CFG) {
+          const truck = core.dynamic.getObjectByName(cfg.id) as THREE.Group | undefined
+          const meta = truck?.userData as Record<string, any> | undefined
+          if (!truck || !meta || meta.dist < meta.route.total - 1) continue
+          truck.updateMatrixWorld(true)
+          const tip = meta.barrelTip.getWorldPosition(new THREE.Vector3())
+          if (tip.distanceTo(target) > 900) continue
+          meta.cannonTarget = Math.atan2(target.x - truck.position.x, target.z - truck.position.z) - truck.rotation.y
+          meta.barrel.rotation.x = -(0.3 + Math.min(0.5, tip.distanceTo(target) / 1500))
+          core.dynamic.add(buildWaterJet(tip, target))
+        }
+      }
+    } else {
+      removeJets()
+    }
+  }, [snapshot?.fire, snapshot?.fleet, snapshot?.phase, snapshot?.task_id, terrain, scene])
 
   return <div className="terrain3d" ref={mountRef} />
 }

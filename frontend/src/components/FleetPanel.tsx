@@ -1,7 +1,7 @@
 import type { UAV } from '../types'
 import { SUBGROUP_META } from '../types'
 
-interface Props { fleet: UAV[]; plan: Record<string, any> | null }
+interface Props { fleet: UAV[]; plan: Record<string, any> | null; ground?: boolean }
 
 const STATUS_LABEL: Record<string, string> = {
   available: '待命', assigned: '已受领', flying: '飞行', working: '作业中',
@@ -14,7 +14,7 @@ const MODULE_LABEL: Record<string, (u: UAV) => string> = {
   sup_10kg: u => `补给箱 ${u.agent_remaining}`,
 }
 
-export default function FleetPanel({ fleet, plan }: Props) {
+export default function FleetPanel({ fleet, plan, ground }: Props) {
   const groups: Array<[string, UAV[]]> = [
     ['reconnaissance', fleet.filter(u => u.subgroup === 'reconnaissance')],
     ['suppression', fleet.filter(u => u.subgroup === 'suppression')],
@@ -62,6 +62,27 @@ export default function FleetPanel({ fleet, plan }: Props) {
           </div>
         </div>
       ))}
+      {ground && (
+        <div className="fleet-group">
+          <div className="group-label" style={{ color: '#ff7a66' }}>🚒 地面消防 · 水罐车 × 2</div>
+          <div className="fleet-cards">
+            <div className="uav-card">
+              <div className="uav-head">
+                <span className="uav-avatar" style={{ borderColor: '#ff7a66' }}>🚒<b>消防01</b></span>
+                <span className="uav-status st-working"><i className="st-dot" />前出 FSP-1</span>
+              </div>
+              <div className="uav-meta"><span className="module">水罐 8t · 水炮射程 80m</span><span>沿 北门巡护道</span></div>
+            </div>
+            <div className="uav-card">
+              <div className="uav-head">
+                <span className="uav-avatar" style={{ borderColor: '#ff7a66' }}>🚒<b>消防02</b></span>
+                <span className="uav-status st-working"><i className="st-dot" />前出 FSP-1</span>
+              </div>
+              <div className="uav-meta"><span className="module">水罐 8t · 水炮射程 80m</span><span>沿 北门巡护道</span></div>
+            </div>
+          </div>
+        </div>
+      )}
       {fleet.length === 0 && <div className="empty">🛫 开始任务后, 2+4+2 机队将在此显示实时状态</div>}
     </div>
   )

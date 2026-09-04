@@ -12,6 +12,12 @@ const animPos: Record<string, { x: number; y: number }> = {}
 let animTaskId = ''
 // 疏散人群平滑行走进度(轮次间连续插值, 不瞬移)
 let evacAnim = 0
+// 消防车地面动画(沿巡护道前出 FSP-1, 与 3D 同步配置)
+const TRUCKS_2D = [
+  { id: '消防01', dist: 0, speed: 0.42, side: 11 },
+  { id: '消防02', dist: -340, speed: 0.30, side: -11 },
+]
+let truck2dTask = ''
 
 // ---------- 场景装饰缓存(森林/湖泊/溪流, 按场景生成一次) ----------
 interface Decor {
@@ -104,6 +110,37 @@ function tent(ctx: CanvasRenderingContext2D, x: number, y: number, s: number) {
   ctx.beginPath(); ctx.moveTo(x, y - s); ctx.lineTo(x - s, y + s * 0.7); ctx.lineTo(x + s, y + s * 0.7); ctx.closePath(); ctx.fill()
   ctx.strokeStyle = '#8a6f42'; ctx.lineWidth = 1.2
   ctx.beginPath(); ctx.moveTo(x, y - s); ctx.lineTo(x, y + s * 0.7); ctx.stroke()
+}
+
+// 消防车俯视图标: 水罐 + 驾驶室 + 六轮 + 红蓝爆闪警灯(与无人机图标造型区分)
+function fireTruck(ctx: CanvasRenderingContext2D, x: number, y: number, ang: number, ts: number, id: string) {
+  ctx.save()
+  ctx.translate(x, y)
+  ctx.rotate(ang)
+  ctx.fillStyle = 'rgba(0,0,0,0.42)'
+  ctx.beginPath(); ctx.roundRect(-14, -5, 30, 13, 3); ctx.fill()
+  ctx.fillStyle = '#d3252b'
+  ctx.beginPath(); ctx.roundRect(-13, -5.5, 19, 11, 2); ctx.fill()
+  ctx.fillStyle = '#9c1418'
+  ctx.beginPath(); ctx.roundRect(6, -5, 8, 10, 2); ctx.fill()
+  ctx.fillStyle = '#cfe8ef'
+  ctx.fillRect(11.6, -3.8, 2, 7.6)
+  ctx.fillStyle = '#f2f5f7'
+  ctx.fillRect(-9, -5.5, 2.6, 11)
+  ctx.fillStyle = '#14181d'
+  for (const [wx, wy] of [[8, -5.8], [8, 5.8], [-3, -5.8], [-3, 5.8], [-8.5, -5.8], [-8.5, 5.8]]) {
+    ctx.beginPath(); ctx.roundRect(wx - 1.7, wy - 1.5, 3.4, 3, 1); ctx.fill()
+  }
+  const flash = Math.sin(ts / 125) > 0
+  ctx.strokeStyle = flash ? 'rgba(255,64,64,0.4)' : 'rgba(77,125,255,0.4)'
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.arc(2, 0, 4.6, 0, Math.PI * 2); ctx.stroke()
+  ctx.fillStyle = flash ? '#ff4040' : '#4d7dff'
+  ctx.beginPath(); ctx.arc(2, 0, 2.4, 0, Math.PI * 2); ctx.fill()
+  ctx.restore()
+  ctx.fillStyle = '#ff9c8f'
+  ctx.font = 'bold 10px Bahnschrift, "Microsoft YaHei", sans-serif'
+  ctx.fillText(id, x + 12, y - 11)
 }
 
 export default function SitMap({ scene, snapshot, terrain }: Props) {
@@ -316,6 +353,47 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
     }
   }
 
+  // ---- 地面消防车(审批通过后沿北门巡护道前出 FSP-1; 再审批期间保持在前线) ----
+  const groundOn = !!(snap && sc && (['executing', 'replanning', 'completed'].includes(snap.phase) ||
+    (snap.phase === 'awaiting_approval' && (snap.rounds?.length ?? 0) > 0)))
+  const roadPts = sc?.roads?.[0]?.points
+  if (groundOn && roadPts && roadPts.length >= 2 && sc) {
+    if (snap.task_id !== truck2dTask) {
+      truck2dTask = snap.task_id
+      TRUCKS_2D[0].dist = 0
+      TRUCKS_2D[1].dist = -340
+    }
+    let fspIdx = roadPts.findIndex(p => Math.hypot(p[0] - sc.forward_supply_point.x, p[1] - sc.forward_supply_point.y) < 40)
+    if (fspIdx < 1) fspIdx = roadPts.length - 1
+    const pts = roadPts.slice(0, fspIdx + 1)
+    const lens: number[] = [0]
+    for (let i = 1; i < pts.length; i++) lens.push(lens[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+    const stopAt = Math.max(0, lens[lens.length - 1] - 34)
+    const truckAt = (d: number) => {
+      const dd = Math.max(0, Math.min(d, stopAt))
+      for (let i = 1; i < pts.length; i++) {
+        if (dd <= lens[i] || i === pts.length - 1) {
+          const seg = lens[i] - lens[i - 1] || 1
+          const t = Math.max(0, Math.min(1, (dd - lens[i - 1]) / seg))
+          return {
+            x: pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t,
+            y: pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t,
+            dx: (pts[i][0] - pts[i - 1][0]) / seg, dy: (pts[i][1] - pts[i - 1][1]) / seg,
+          }
+        }
+      }
+      return null
+    }
+    for (const t of TRUCKS_2D) {
+      t.dist = Math.min(t.dist + t.speed, stopAt)
+      const p = truckAt(t.dist)
+      if (!p) continue
+      // 道路侧向偏移, 两车并行不重叠
+      const mx = p.x - p.dy * t.side, my = p.y + p.dx * t.side
+      fireTruck(ctx, px(mx), py(my), Math.atan2(p.dy, p.dx), ts, t.id)
+    }
+  }
+
   // ---- 疏散层: 路线 + 人群小人 ----
   const evac = (snap as any)?.support_plan?.evacuation
   if (!evac || !evac.path) evacAnim = 0
@@ -394,6 +472,29 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
     }
   }
 
+  // ---- 搜索阶段: 巡逻航线 + 扫描波纹(未发现前火不可见) ----
+  const searching = snap && !snap.fire && (snap as any).search !== undefined && snap.phase === 'searching'
+  if (searching) {
+    const LEGS: Array<[number, number, number, number]> = [
+      [120, 250, 1880, 250], [1880, 650, 120, 650],
+      [1880, 950, 120, 950], [120, 1350, 1880, 1350]]
+    ctx.setLineDash([4, 9])
+    ctx.strokeStyle = 'rgba(59, 130, 246, 0.30)'
+    ctx.lineWidth = 1.5
+    for (const [x0, y0, x1, y1] of LEGS) {
+      ctx.beginPath(); ctx.moveTo(px(x0), py(y0)); ctx.lineTo(px(x1), py(y1)); ctx.stroke()
+    }
+    ctx.setLineDash([])
+    // 已扫航线高亮
+    const legsDone = ((snap as any).search?.legs ?? 0)
+    ctx.strokeStyle = 'rgba(94, 234, 212, 0.5)'
+    ctx.lineWidth = 2.5
+    for (let k = 0; k < Math.min(legsDone, LEGS.length); k++) {
+      const [x0, y0, x1, y1] = LEGS[k]
+      ctx.beginPath(); ctx.moveTo(px(x0), py(y0)); ctx.lineTo(px(x1), py(y1)); ctx.stroke()
+    }
+  }
+
   // ---- 无人机(四旋翼 + 投影 + SOC 环) ----
   const fleet: UAV[] = snap?.fleet ?? []
   if (snap && snap.task_id !== animTaskId) {
@@ -430,10 +531,31 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
       ctx.beginPath(); ctx.arc(x, y, 16 + 3 * Math.sin(ts / 200), 0, Math.PI * 2)
       ctx.strokeStyle = meta.color + '77'; ctx.lineWidth = 1.5; ctx.stroke()
     }
+    if (searching && uav.subgroup === 'reconnaissance') {
+      const sweep = (ts % 1800) / 1800
+      ctx.beginPath(); ctx.arc(x, y, 8 + sweep * 95, 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(94, 234, 212, ${(0.55 * (1 - sweep)).toFixed(3)})`
+      ctx.lineWidth = 2; ctx.stroke()
+      ctx.beginPath(); ctx.arc(x, y, 100, 0, Math.PI * 2)
+      ctx.strokeStyle = 'rgba(94, 234, 212, 0.14)'; ctx.lineWidth = 1; ctx.stroke()
+    }
     ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 10px Bahnschrift, sans-serif'
     ctx.fillText(uav.uav_id, x + 15, y - 9)
     ctx.fillStyle = '#94a3b8'; ctx.font = '9px Consolas, monospace'
     ctx.fillText(`${uav.soc.toFixed(0)}%`, x + 15, y + 3)
+  }
+
+  // ---- 搜索覆盖度提示 ----
+  if (searching) {
+    const cov = ((snap as any).search?.coverage ?? 0)
+    ctx.fillStyle = 'rgba(94, 234, 212, 0.85)'
+    ctx.font = 'bold 13px "Microsoft YaHei UI", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(`🔭 侦察机巡航搜索中 · 已覆盖 ${cov}% 区域`, px(W / 2), py(H / 2) - 10)
+    ctx.fillStyle = 'rgba(143, 163, 154, 0.6)'
+    ctx.font = '11px sans-serif'
+    ctx.fillText('火情位置未知 —— 发现火点后将立即回传指挥中心', px(W / 2), py(H / 2) + 12)
+    ctx.textAlign = 'left'
   }
 
   // ---- 空态提示 ----

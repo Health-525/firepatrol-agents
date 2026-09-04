@@ -76,6 +76,7 @@ export interface Snapshot {
   approval_request: ApprovalRequest | null
   report: Record<string, any> | null
   support_plan?: { branch?: string; evacuation?: Evacuation; support?: Array<Record<string, any>>; recon?: Array<Record<string, any>> } | null
+  search?: { legs: number; coverage: number } | null
 }
 
 export interface ApprovalRequest {
@@ -145,6 +146,6 @@ export const SUBGROUP_META: Record<string, { label: string; color: string; short
 }
 
 export const PHASE_LABEL: Record<string, string> = {
-  created: '已建案', analyzing: '研判中', awaiting_approval: '等待审批', executing: '执行中',
+  created: '已建案', searching: '搜索巡航中', analyzing: '研判中', awaiting_approval: '等待审批', executing: '执行中',
   replanning: '重规划中', completed: '已完成', rejected: '已拒绝', error: '异常',
 }

@@ -145,7 +145,9 @@ export default function App() {
             <ApprovalCard request={snapshot.approval_request} busy={busy} onDecide={decide} />
           )}
           {snapshot?.report && <ReportCard report={snapshot.report} />}
-          <FleetPanel fleet={fleet} plan={snapshot?.plan ?? null} />
+          <FleetPanel fleet={fleet} plan={snapshot?.plan ?? null}
+            ground={!!snapshot && (['executing', 'replanning', 'completed'].includes(phase) ||
+              (phase === 'awaiting_approval' && (snapshot.rounds?.length ?? 0) > 0))} />
           <ChatPanel taskId={taskId} enabled={llm.connected} />
           <AgentPanel messages={snapshot?.messages ?? []} agents={agents} />
         </section>
