@@ -84,6 +84,7 @@ class Blackboard:
             "fire": mission["fire"], "fleet": mission["fleet"], "inventory": mission["inventory"],
             "environment": mission["environment"], "candidates": mission["candidates"],
             "plan": mission["plan"], "rounds": mission["rounds"], "messages": mission["messages"],
+            "support_plan": mission.get("support_plan"),  # 含疏散路线/人群进度, 前端地图依赖
             "approval_request": mission["approval_request"], "report": mission["report"],
         }
 

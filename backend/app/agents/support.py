@@ -46,13 +46,19 @@ class SupportAgent(BaseAgent):
         if people == "confirmed" and branch == "people":
             zone = (scene.get("people_zones") or [{}])[0]
             evac = plan_evacuation(scene, fire.get("cells", []), zone)
+            existing = ((state.get("support_plan") or {}).get("evacuation") or {})
             if evac["found"]:
                 text = (f"{zone.get('name', '人员区域')}的{zone.get('people', '各位')}名人员请注意:"
                         f"当前火情负荷 {fire['total_flp']} FLP,风速 {fire['wind_speed']} 米每秒,"
                         f"请立即沿{'、'.join(self._route_brief(evac))}方向向{evac['exit']}撤离,"
                         f"全程约 {evac['walk_minutes']} 分钟,累计爬升 {evac['climb_m']} 米,"
                         f"请勿穿越火场东侧浓烟区,S1 号机将在上空持续引导。")
-                evac.update({"text": text, "progress_cells": 0, "evacuated": False, "people": zone.get("people", 0)})
+                # 重规划时继承人群进度(路线若因火情改变, 进度按比例折算)
+                carried = existing.get("progress_cells", 0)
+                if existing.get("path") and len(existing["path"]) > 1 and existing["path"][-1] == evac["path"][-1]:
+                    carried = carried * (len(evac["path"]) - 1) / max(len(existing["path"]) - 1, 1)
+                evac.update({"text": text, "progress_cells": round(carried, 2),
+                             "evacuated": bool(existing.get("evacuated", False)), "people": zone.get("people", 0)})
                 plan["evacuation"] = evac
                 self.say(task_id, "EVAC_BROADCAST", "human",
                          f"🔊 S1 已开始空中语音广播:{text}",

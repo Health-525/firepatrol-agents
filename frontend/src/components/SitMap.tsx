@@ -10,6 +10,8 @@ const W = 2000, H = 1400 // 世界坐标(米)
 // 无人机动画位置(uav_id -> 当前渲染坐标)
 const animPos: Record<string, { x: number; y: number }> = {}
 let animTaskId = ''
+// 疏散人群平滑行走进度(轮次间连续插值, 不瞬移)
+let evacAnim = 0
 
 // ---------- 场景装饰缓存(森林/湖泊/溪流, 按场景生成一次) ----------
 interface Decor {
@@ -316,6 +318,7 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
 
   // ---- 疏散层: 路线 + 人群小人 ----
   const evac = (snap as any)?.support_plan?.evacuation
+  if (!evac || !evac.path) evacAnim = 0
   if (evac && evac.path && evac.path.length > 1) {
     // 辉光底线 + 亮线
     const routeColor = evac.evacuated ? '#6fbf97' : '#5eead4'
@@ -346,14 +349,20 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   if (zone) {
     const peopleCount = evac?.people ?? zone.people
     if (evac?.path && !evac.evacuated) {
-      const idx = Math.min(Math.floor(evac.progress_cells || 0), evac.path.length - 1)
-      const here = evac.path[idx]
-      const wob = Math.sin(ts / 260) * 2.5
+      // 平滑步行: 每帧向目标进度收敛, 轮次之间连续行走
+      const target = Math.min(evac.progress_cells || 0, evac.path.length - 1)
+      evacAnim += (target - evacAnim) * 0.022
+      const pos = evac.path[Math.min(Math.floor(evacAnim), evac.path.length - 1)]
+      const nxt = evac.path[Math.min(Math.floor(evacAnim) + 1, evac.path.length - 1)]
+      const frac = Math.min(1, Math.max(0, evacAnim - Math.floor(evacAnim)))
+      const hereX = pos.x + (nxt.x - pos.x) * frac
+      const hereY = pos.y + (nxt.y - pos.y) * frac
+      const wob = Math.sin(ts / 200) * 2.5
       for (let k = 0; k < Math.min(peopleCount, 4); k++) {
-        person(ctx, px(here.x) + (k - 1.5) * 13 + wob * (k % 2 ? 1 : -1), py(here.y) + (k % 2) * 8, '#ffcf8a', 1.15)
+        person(ctx, px(hereX) + (k - 1.5) * 13 + wob * (k % 2 ? 1 : -1), py(hereY) + (k % 2) * 8, '#ffcf8a', 1.15)
       }
       ctx.fillStyle = '#ffcf8a'; ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'
-      ctx.fillText(`🧍${peopleCount} 人撤离中`, px(here.x), py(here.y) - 24)
+      ctx.fillText(`🧍${peopleCount} 人撤离中`, px(hereX), py(hereY) - 24)
       ctx.textAlign = 'left'
     } else if (!evac?.evacuated) {
       const zx = px(zone.cx * 100 + 50), zy = py(zone.cy * 100 + 50)
