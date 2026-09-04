@@ -32,16 +32,14 @@ class CommanderAgent(BaseAgent):
             uav.setdefault("target", None)
         inventory = R.load_json("data/inventory.json")
         BOARD.update(task_id, phase="analyzing", environment=scene, fleet=fleet, inventory=inventory)
-        directive, trace = await self.think(
-            "下达任务指令: 向侦察研判 Agent 明确本次研判重点(不超过80字, 像指挥官下命令)",
-            f"场景「{scenario['label']}」,初始风 {scenario['wind_speed']} m/s,人员 {scenario['people_status']},"
-            f"火型 {scenario['fire_type']}", max_tokens=140)
-        order = directive or (f"接警建案 {task_id}:场景「{scenario['label']}」。侦察研判 Agent,"
-                             "请执行火情感知、环境研判与 FLP 评估。")
-        self.say(task_id, "TASK_ASSIGN", "recon", order, {"llm": None} if not directive else None)
-        if directive:
-            # LLM 生成的派单指令也走 say_llm 语义(附工具轨迹)
-            BOARD.require(task_id)["messages"][-1]["data"] = {"llm": "glm", "tools": [t["tool"] for t in trace]}
+        order = (f"接警建案 {task_id}:场景「{scenario['label']}」。侦察研判 Agent,"
+                 "请执行火情感知、环境研判与 FLP 评估。")
+        self.say(task_id, "TASK_ASSIGN", "recon", order)
+        # LLM 指令后台补发, 不阻塞任务图(数字先行)
+        self.think_bg(task_id, "TASK_ASSIGN", "recon",
+                      "下达任务指令: 向侦察研判 Agent 明确本次研判重点(不超过80字, 像指挥官下命令)",
+                      f"场景「{scenario['label']}」,初始风 {scenario['wind_speed']} m/s,人员 {scenario['people_status']},"
+                      f"火型 {scenario['fire_type']}", max_tokens=140)
         return {
             "scenario_cfg": scenario, "environment": scene, "fleet": fleet, "inventory": inventory,
             "replans": 0, "round_index": 0, "rounds": [],

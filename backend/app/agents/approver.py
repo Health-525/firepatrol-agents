@@ -1,7 +1,6 @@
 """⑥ 交互审批 Agent —— 面向用户: 方案解释(数字来源标注)、审批中断、报告归档。"""
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict
 
 from langgraph.types import interrupt
@@ -65,8 +64,13 @@ class ApproverAgent(BaseAgent):
                      f"方案已生成,等待审批。最优 {best['candidate_id']}:灭火机 {len(best.get('suppression_uavs', []))} 架 + "
                      f"{best.get('module')};{feasibility_label};预计 {best.get('time_interval', '无法给出')}。"
                      f"生成方案 ≠ 执行,确认后才会锁定资源。", request)
-            # 审批建议异步生成: 审批卡先到用户手上, GLM 建议算完再补发, 不阻塞审批门
-            asyncio.create_task(self._advice(task_id, request, best, support, feasibility_label))
+            # 审批建议后台生成: 审批卡先到用户手上, GLM 建议算完再补发, 不阻塞审批门
+            self.think_bg(task_id, "APPROVAL_REQ", "human",
+                          "给出审批建议: 推荐批准/调整/拒绝中的哪个, 最关键的理由与风险提示(数字必须来自下方数据)",
+                          f"最优方案 {best['candidate_id']}({','.join(best.get('suppression_uavs', []))},"
+                          f"评分J={best.get('score', {}).get('score')},{best.get('time_interval', '无法给出')},"
+                          f"{feasibility_label});支援分支 {support.get('branch')};"
+                          f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}", max_tokens=260)
 
         decision = interrupt(request)  # ---- LangGraph 审批中断, 等待 human ----
 
@@ -75,22 +79,6 @@ class ApproverAgent(BaseAgent):
                  f"用户决策:{decision.get('decision')}" + (f"(意见:{decision.get('feedback')})" if decision.get("feedback") else ""),
                  decision)
         return {"approval": decision}
-
-    async def _advice(self, task_id: str, request: Dict[str, Any], best: Dict[str, Any],
-                      support: Dict[str, Any], feasibility_label: str | None) -> None:
-        """后台生成审批建议; 任何失败静默回落(无建议不影响审批)。"""
-        try:
-            numbers = "; ".join(f"{k['name']}={k['value']}" for k in request["key_numbers"])
-            advice, trace = await self.think(
-                "给出审批建议: 推荐批准/调整/拒绝中的哪个, 最关键的理由与风险提示(数字必须来自下方数据)",
-                f"最优方案 {best['candidate_id']}({','.join(best.get('suppression_uavs', []))},"
-                f"评分J={best.get('score', {}).get('score')},{best.get('time_interval', '无法给出')},"
-                f"{feasibility_label});支援分支 {support.get('branch')};关键数字: {numbers};"
-                f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}", max_tokens=260)
-            if advice:
-                self.say_llm(task_id, "APPROVAL_REQ", "human", f"审批建议:{advice}", trace)
-        except Exception:  # noqa: BLE001
-            pass
 
     # ------------------------------------------------ 报告归档
 
@@ -120,10 +108,8 @@ class ApproverAgent(BaseAgent):
         self.say(task_id, "REPORT_READY", "human",
                  f"任务归档:{conclusion} 轮次 {len(rounds)},FLP {flp0}→{flp1},"
                  f"换电 {report['swaps']} 次、补水 {report['refills']} 次、重规划 {report['replans']} 次。", report)
-        closing, trace = await self.think(
-            "结案复盘: 任务结果评价、资源使用效率、下次可改进点(只引用给定数字)",
-            f"结论: {conclusion};轮次 {len(rounds)};FLP {flp0}→{flp1};换电 {report['swaps']},"
-            f"补水 {report['refills']},重规划 {report['replans']}", max_tokens=220)
-        if closing:
-            self.say_llm(task_id, "REPORT_READY", "human", f"结案研判:{closing}", trace)
+        self.think_bg(task_id, "REPORT_READY", "human",
+                      "结案复盘: 任务结果评价、资源使用效率、下次可改进点(只引用给定数字)",
+                      f"结论: {conclusion};轮次 {len(rounds)};FLP {flp0}→{flp1};换电 {report['swaps']},"
+                      f"补水 {report['refills']},重规划 {report['replans']}", max_tokens=220)
         return {"report": report, "phase": final_phase}

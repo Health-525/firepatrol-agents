@@ -70,13 +70,11 @@ class ReconAgent(BaseAgent):
                  f"火情研判完成:{len(fire['cells'])} 个网格,总火情负荷 B={total_flp} FLP,增长率 {cfg['growth_flp_per_hour']} FLP/h,"
                  f"火势等级 {intensity_level}。风速 {wind} m/s({band['label']}),K_wind={band['k_wind']}。"
                  f"人员状态:{fire['people_status']}。", {"fire": fire, "center": center})
-        analysis, trace = await self.think(
-            "给出火情研判意见: 火势态势、蔓延风险(结合风档/坡度/燃料)、人员分支建议",
-            f"网格数 {len(fire['cells'])},FLP={total_flp},增长 {cfg['growth_flp_per_hour']} FLP/h,"
-            f"风 {wind} m/s({band['label']}),坡度 {scene['slope_deg']}°,燃料 {scene['fuel_type']},"
-            f"人员 {fire['people_status']},检测置信度 {fire['confidence']}")
-        if analysis:
-            self.say_llm(task_id, "FINDING", "commander", analysis, trace)
+        self.think_bg(task_id, "FINDING", "commander",
+                      "给出火情研判意见: 火势态势、蔓延风险(结合风档/坡度/燃料)、人员分支建议",
+                      f"网格数 {len(fire['cells'])},FLP={total_flp},增长 {cfg['growth_flp_per_hour']} FLP/h,"
+                      f"风 {wind} m/s({band['label']}),坡度 {scene['slope_deg']}°,燃料 {scene['fuel_type']},"
+                      f"人员 {fire['people_status']},检测置信度 {fire['confidence']}")
         return {"fire": fire, "fire_center": center, "vision": observation}
 
     @staticmethod

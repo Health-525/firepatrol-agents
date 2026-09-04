@@ -30,22 +30,26 @@ export default function AgentPanel({ messages, agents }: Props) {
     if (el) el.scrollTop = el.scrollHeight
   }, [messages.length])
 
+  const llmCount = messages.filter(m => (m.data as any)?.llm).length
+
   return (
     <div className="agent-panel">
-      <div className="panel-title">Agent 协作流 <span className="count">{messages.length} 条</span></div>
+      <div className="panel-title">Agent 协作流
+        <span className="count">{messages.length} 条 · GLM 研判 {llmCount} 条</span>
+      </div>
       <div className="agent-messages" ref={listRef}>
-        {messages.length === 0 && <div className="empty">开始任务后,六个智能体的协作消息将在此实时滚动…</div>}
+        {messages.length === 0 && <div className="empty">🤖 六个智能体已就绪<br /><small>开始任务后, 派单 / 研判 / 方案 / 仿真 / 审批 / 重规划消息将在此实时滚动</small></div>}
         {messages.map(m => {
           const from = byId.get(m.frm) ?? { name: m.frm, color: '#64748b', emoji: '•' } as AgentProfile
           const typeMeta = TYPE_META[m.msg_type] ?? { label: m.msg_type, color: '#64748b' }
           return (
-            <div key={m.seq} className={`msg ${m.data && (m.data as any).llm ? 'msg-llm' : ''}`}>
+            <div key={m.seq} className={`msg ${m.data && (m.data as any).llm ? 'msg-llm' : ''} ${m.seq === messages.length ? 'msg-latest' : ''}`}>
               <div className="msg-head">
-                <span className="msg-avatar" style={{ background: from.color + '26', color: from.color, borderColor: from.color }}>
-                  {from.emoji} {from.name}
+                <span className="msg-avatar" style={{ borderColor: from.color + 'cc', background: from.color + '1f' }}>
+                  <i className="avatar-dot" style={{ background: from.color }}>{from.emoji}</i>{from.name}
                 </span>
-                <span className="msg-arrow">→ {m.to === 'human' ? '指挥员' : m.to === 'blackboard' ? '黑板' : (byId.get(m.to)?.name ?? m.to)}</span>
-                <span className="msg-type" style={{ color: typeMeta.color, borderColor: typeMeta.color }}>{typeMeta.label}</span>
+                <span className="msg-arrow">➜ {m.to === 'human' ? '指挥员' : m.to === 'blackboard' ? '黑板' : (byId.get(m.to)?.name ?? m.to)}</span>
+                <span className="msg-type" style={{ color: typeMeta.color, borderColor: typeMeta.color + '88', background: typeMeta.color + '14' }}>{typeMeta.label}</span>
                 {m.data && (m.data as any).llm && <span className="llm-chip">GLM</span>}
                 <span className="msg-seq">#{m.seq}</span>
               </div>

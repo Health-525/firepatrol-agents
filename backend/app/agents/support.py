@@ -42,13 +42,11 @@ class SupportAgent(BaseAgent):
         plan = {"branch": branch, "recon": recon_assignments, "support": assignments, "people_status": people}
         BOARD.update(task_id, support_plan=plan)
         self.say(task_id, "PLAN_PROPOSAL", "commander", f"支援分支决策:{desc}", plan)
-        analysis, trace = await self.think(
-            "解释支援分支决策依据: 为什么选该分支、S1/S2 分工逻辑、对灭火资源的影响",
-            f"人员状态 {people},分支 {branch};支援分配 {assignments};侦察保留 {len(recon_assignments)} 架;"
-            f"库存 电池 {(state.get('inventory') or {}).get('battery_packs', 0)} 组 / "
-            f"W20 模块 {(state.get('inventory') or {}).get('water_modules_w20', 0)}")
-        if analysis:
-            self.say_llm(task_id, "PLAN_PROPOSAL", "commander", analysis, trace)
+        self.think_bg(task_id, "PLAN_PROPOSAL", "commander",
+                      "解释支援分支决策依据: 为什么选该分支、S1/S2 分工逻辑、对灭火资源的影响",
+                      f"人员状态 {people},分支 {branch};支援分配 {assignments};侦察保留 {len(recon_assignments)} 架;"
+                      f"库存 电池 {(state.get('inventory') or {}).get('battery_packs', 0)} 组 / "
+                      f"W20模块 {(state.get('inventory') or {}).get('water_modules_w20', 0)}")
         return {"support_plan": plan}
 
     def _branch(self, people: str, support: list, center: dict, base: dict, fsp: dict, state: dict) -> tuple:

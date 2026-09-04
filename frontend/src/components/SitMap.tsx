@@ -198,20 +198,34 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
     const p = animPos[uav.uav_id]
     const meta = SUBGROUP_META[uav.subgroup] ?? { color: '#94a3b8', label: uav.subgroup, short: '?' }
     const x = px(p.x), y = py(p.y)
-    // SOC 环
-    ctx.beginPath(); ctx.arc(x, y, 12, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * (uav.soc / 100))
-    ctx.strokeStyle = uav.soc < 25 ? '#ef4444' : meta.color; ctx.lineWidth = 3; ctx.stroke()
+    // 地面投影(高度感)
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'
+    ctx.beginPath(); ctx.ellipse(x + 6, y + 10, 9, 4, 0, 0, Math.PI * 2); ctx.fill()
+    // SOC 电量环
+    ctx.beginPath(); ctx.arc(x, y, 13, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * (uav.soc / 100))
+    ctx.strokeStyle = uav.soc < 25 ? '#e07856' : meta.color; ctx.lineWidth = 2.6; ctx.stroke()
+    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(140,160,150,0.22)'; ctx.lineWidth = 1; ctx.stroke()
+    // 四旋翼: 机臂 + 旋翼
+    ctx.strokeStyle = meta.color; ctx.lineWidth = 1.6
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + dx * 8, y + dy * 8); ctx.stroke()
+      ctx.beginPath(); ctx.arc(x + dx * 8, y + dy * 8, 3.4, 0, Math.PI * 2)
+      ctx.strokeStyle = meta.color + 'aa'; ctx.lineWidth = 1.2; ctx.stroke()
+    }
     // 机体
     ctx.fillStyle = meta.color
-    ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(x, y, 5.5, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = '#ffffffc9'
+    ctx.beginPath(); ctx.arc(x - 1.5, y - 1.5, 1.8, 0, Math.PI * 2); ctx.fill()
     if (uav.status === 'working') { // 作业光环
-      ctx.beginPath(); ctx.arc(x, y, 15 + 3 * Math.sin(ts / 200), 0, Math.PI * 2)
-      ctx.strokeStyle = meta.color + '88'; ctx.lineWidth = 1.5; ctx.stroke()
+      ctx.beginPath(); ctx.arc(x, y, 16 + 3 * Math.sin(ts / 200), 0, Math.PI * 2)
+      ctx.strokeStyle = meta.color + '77'; ctx.lineWidth = 1.5; ctx.stroke()
     }
-    ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 10px sans-serif'
-    ctx.fillText(uav.uav_id, x + 13, y - 8)
-    ctx.fillStyle = '#94a3b8'; ctx.font = '9px sans-serif'
-    ctx.fillText(`${uav.soc.toFixed(0)}%`, x + 13, y + 4)
+    ctx.fillStyle = '#e2e8f0'; ctx.font = 'bold 10px Bahnschrift, sans-serif'
+    ctx.fillText(uav.uav_id, x + 15, y - 9)
+    ctx.fillStyle = '#94a3b8'; ctx.font = '9px Consolas, monospace'
+    ctx.fillText(`${uav.soc.toFixed(0)}%`, x + 15, y + 3)
   }
 
   // 风向箭头(右上角)

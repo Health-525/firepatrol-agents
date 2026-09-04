@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..domain.store import BOARD
@@ -37,6 +38,22 @@ class BaseAgent:
         """有界工具调用推理; GLM 不可用时返回空串(调用方走确定性文案)。"""
         text, trace = await self.brain.run(task, context, max_tokens=max_tokens)
         return text or "", trace
+
+    def think_bg(self, task_id: str, msg_type: str, to: str, task: str, context: str,
+                 max_tokens: int = 300) -> None:
+        """后台生成 GLM 研判并补发消息: 不阻塞任务图关键路径(数字先行, 叙述随后)。"""
+        async def _run() -> None:
+            try:
+                text, trace = await self.brain.run(task, context, max_tokens=max_tokens)
+                if text:
+                    self.say_llm(task_id, msg_type, to, text, trace)
+            except Exception:  # noqa: BLE001
+                pass  # LLM 失败不影响确定性主流程
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:  # 无运行中的事件循环(离线脚本)
+            pass
 
     def say_llm(self, task_id: str, msg_type: str, to: str, text: str,
                 trace: List[Dict[str, Any]] | None = None) -> None:

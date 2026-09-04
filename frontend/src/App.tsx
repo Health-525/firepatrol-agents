@@ -118,12 +118,17 @@ export default function App() {
       </div>
 
       <div className="agents-strip">
-        {agents.map(a => (
-          <div key={a.agent_id} className="agent-chip" style={{ borderColor: a.color + '88' }}>
-            <span>{a.emoji}</span>
-            <div><b style={{ color: a.color }}>{a.name}</b><small>{a.role}</small></div>
-          </div>
-        ))}
+        {agents.map(a => {
+          const speaking = snapshot?.messages?.length
+            ? snapshot.messages[snapshot.messages.length - 1].frm === a.agent_id : false
+          return (
+            <div key={a.agent_id} className={`agent-chip ${speaking ? 'speaking' : ''}`} style={{ borderColor: a.color + '88' }}>
+              <span className="chip-face" style={{ background: a.color + '1f' }}>{a.emoji}</span>
+              <div className="chip-body"><b style={{ color: a.color }}>{a.name}</b><small>{a.role}</small></div>
+              {speaking && <span className="speaking-wave"><i /><i /><i /></span>}
+            </div>
+          )
+        })}
       </div>
 
       <main className="layout">

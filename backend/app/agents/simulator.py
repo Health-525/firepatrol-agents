@@ -81,12 +81,10 @@ class SimulatorAgent(BaseAgent):
             ranking_brief = "; ".join(f"{c['candidate_id']}(灭火机{len(c.get('suppression_uavs', []))}架,"
                                       f"J={c['score']['score']},{c['time_interval']},{c['feasibility']})" for c in ranked)
             best_id = best.get("candidate_id")
-            analysis, trace = await self.think(
-                "解读候选排序: 为什么最优是它(时间/残余/耗电/物资/变更的权衡), 排序由规则引擎评分确定不可推翻",
-                f"B={fire['total_flp']} FLP,增长率 {fire['growth_flp_per_hour']} FLP/h,风 {fire['wind_speed']} m/s;"
-                f"候选(J 越小越优): {ranking_brief};规则引擎判定最优={best_id}")
-            if analysis:
-                self.say_llm(task_id, "SIM_RESULT", "commander", analysis, trace)
+            self.think_bg(task_id, "SIM_RESULT", "commander",
+                          "解读候选排序: 为什么最优是它(时间/残余/耗电/物资/变更的权衡), 排序由规则引擎评分确定不可推翻",
+                          f"B={fire['total_flp']} FLP,增长率 {fire['growth_flp_per_hour']} FLP/h,风 {fire['wind_speed']} m/s;"
+                          f"候选(J 越小越优): {ranking_brief};规则引擎判定最优={best_id}")
         return {"candidates": ranked, "best_candidate": best}
 
     @staticmethod
@@ -316,12 +314,10 @@ class SimulatorAgent(BaseAgent):
             BOARD.update(task_id, phase="replanning", replans=replans)
             self.say(task_id, "REPLAN_TRIGGER", "commander",
                      f"触发重规划:{trigger['detail']}({trigger['rule']})。指挥官请重新组织研判与方案生成。", trigger)
-            impact, trace = await self.think(
-                "分析突变影响: 触发事件对火势/药剂效率/方案的影响, 以及重规划应重点调整什么",
-                f"第{round_index}轮, 触发: {trigger['detail']};当前 B={fire['total_flp']} FLP,"
-                f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),本轮压制 {round(suppression_flp, 1)} FLP")
-            if impact:
-                self.say_llm(task_id, "REPLAN_TRIGGER", "commander", impact, trace)
+            self.think_bg(task_id, "REPLAN_TRIGGER", "commander",
+                          "分析突变影响: 触发事件对火势/药剂效率/方案的影响, 以及重规划应重点调整什么",
+                          f"第{round_index}轮, 触发: {trigger['detail']};当前 B={fire['total_flp']} FLP,"
+                          f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),本轮压制 {round(suppression_flp, 1)} FLP")
         elif round_index >= cfg["time"]["max_rounds"]:
             route, conclusion = "done", f"达到最大轮次({cfg['time']['max_rounds']}),剩余 FLP {fire['total_flp']}。"
         elif active and stall_rounds >= 4:

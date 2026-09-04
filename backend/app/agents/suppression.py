@@ -62,13 +62,11 @@ class SuppressionAgent(BaseAgent):
                  f"候选方案生成完毕:药剂 {module}(kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP),"
                  f"枚举 {len(candidates)} 个组合,过硬约束 {len(feasible_ids)} 个:{', '.join(feasible_ids) or '无'}。{veto}",
                  {"candidates": candidates, "capability": cap})
-        analysis, trace = await self.think(
-            "解释候选方案设计: 药剂选择依据、组合从少到多的取舍逻辑、硬约束淘汰原因",
-            f"火型 {fire['fire_type']},药剂 {module},kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP;"
-            f"过硬约束组合: {feasible_ids or '无'};淘汰原因: {veto_reasons or '无'};"
-            f"硬约束明细: {json.dumps(candidates[-1]['checks'], ensure_ascii=False)[:400] if candidates else '[]'}")
-        if analysis:
-            self.say_llm(task_id, "PLAN_PROPOSAL", "commander", analysis, trace)
+        self.think_bg(task_id, "PLAN_PROPOSAL", "commander",
+                      "解释候选方案设计: 药剂选择依据、组合从少到多的取舍逻辑、硬约束淘汰原因",
+                      f"火型 {fire['fire_type']},药剂 {module},kappa={cap['kappa']},单架次有效能力 {cap['effective_flp']} FLP;"
+                      f"过硬约束组合: {feasible_ids or '无'};淘汰原因: {veto_reasons or '无'};"
+                      f"硬约束明细: {json.dumps(candidates[-1]['checks'], ensure_ascii=False)[:400] if candidates else '[]'}")
         return {"candidates": candidates, "module": module, "capability": cap}
 
     @staticmethod
