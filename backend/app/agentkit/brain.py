@@ -61,13 +61,14 @@ class AgentBrain:
         ]
         trace: List[Dict[str, Any]] = []
         for index in range(max_tool_rounds + 1):
-            final_round = index == max_tool_rounds
-            # 最后一轮禁用工具: 模型必须基于已获取的工具结果直出结论,
-            # 否则勤勉的模型会把全部轮次花在调工具上, 永远不给答案
-            payload = await _post_chat({"model": _cfg()[2], "messages": messages, "tools": self.schemas,
-                                        "tool_choice": "none" if final_round else "auto",
-                                        "temperature": temperature,
-                                        "max_tokens": max_tokens}, timeout)
+            # 最后一轮不携带 tools(智谱等端点会无视 tool_choice=none 仍返回工具调用):
+            # 无工具可调, 模型必须基于已获取的工具结果直出结论
+            body: Dict[str, Any] = {"model": _cfg()[2], "messages": messages,
+                                    "temperature": temperature, "max_tokens": max_tokens}
+            if index < max_tool_rounds:
+                body["tools"] = self.schemas
+                body["tool_choice"] = "auto"
+            payload = await _post_chat(body, timeout)
             if not payload:
                 return None, trace
             try:
@@ -78,8 +79,6 @@ class AgentBrain:
             if not tool_calls:
                 text = (message.get("content") or "").strip()
                 return (text or None), trace
-            if final_round:
-                return None, trace  # 强制直出轮仍请求工具: 放弃, 调用方走降级
             messages.append({"role": "assistant", "content": message.get("content") or "",
                              "tool_calls": tool_calls})
             for call in tool_calls[:4]:  # 单轮最多执行 4 个工具, 防滥用

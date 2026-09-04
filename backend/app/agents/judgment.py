@@ -261,13 +261,21 @@ def conservative_judgment(snapshot: Dict[str, Any]) -> Dict[str, Any]:
 async def judge(snapshot: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     """执行一轮自主研判。返回 (结构化判断, 工具调用轨迹); 永不抛异常、永不返回 None。"""
     brief = json.dumps(snapshot, ensure_ascii=False)
+    task = "对本轮快照做自主研判, 按协议只输出 JSON。"
+    text: Optional[str] = None
+    trace: List[Dict[str, Any]] = []
     try:
-        text, trace = await _brain.run(
-            "对本轮快照做自主研判, 按协议只输出 JSON。", brief,
-            max_tool_rounds=2, max_tokens=800, temperature=0.2, timeout=15.0)
+        text, trace = await _brain.run(task, brief, max_tool_rounds=2,
+                                       max_tokens=1200, temperature=0.2, timeout=30.0)
+        if not parse_judgment(text):
+            # 直答重试: 不带工具(max_tool_rounds=0 时请求不含 tools), 逼模型直接输出 JSON
+            retry, _ = await _brain.run(task, brief, max_tool_rounds=0,
+                                        max_tokens=1200, temperature=0.2, timeout=30.0)
+            if retry:
+                text = retry
     except Exception:  # noqa: BLE001  # 大脑任何异常都不许打断任务图
-        text, trace = None, []
-    parsed = parse_judgment(text)
+        text = None
+    parsed = parse_judgment(text) if text else None
     normalized = normalize_judgment(parsed, "glm") if parsed else None
     if normalized is not None:
         return normalized, trace
