@@ -5,6 +5,7 @@ import asyncio
 from typing import Any, Dict, List
 
 from ..agentkit.base import BaseAgent
+from ..agentkit.llm import agent_analysis, llm_status
 from ..domain.store import BOARD
 from ..rules import tools as R
 
@@ -21,7 +22,7 @@ class SimulatorAgent(BaseAgent):
 
     # ------------------------------------------------ 评估: 为每个候选打分排名
 
-    def evaluate(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def evaluate(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         fire = state["fire"]
         fleet = {u["uav_id"]: u for u in state["fleet"]}
@@ -73,6 +74,18 @@ class SimulatorAgent(BaseAgent):
         self.say(task_id, "SIM_RESULT", "commander", summary,
                  {"ranked": [{ "id": c["candidate_id"], "J": c["score"]["score"], "t": c["time_interval"],
                               "feasibility": c["feasibility"]} for c in ranked]})
+        if ranked:
+            ranking_brief = "; ".join(f"{c['candidate_id']}(灭火机{len(c.get('suppression_uavs', []))}架,"
+                                      f"J={c['score']['score']},{c['time_interval']},{c['feasibility']})" for c in ranked)
+            best_id = best.get("candidate_id")
+            analysis = await agent_analysis(self.name, self.role,
+                                            f"B={fire['total_flp']} FLP,增长率 {fire['growth_flp_per_hour']} FLP/h,"
+                                            f"风 {fire['wind_speed']} m/s;候选排名(J 越小越优, 已按规则引擎评分确定): "
+                                            f"{ranking_brief};规则引擎判定最优={best_id}, 不可推翻该排序",
+                                            topic="调度评分 候选方案 最优 净处置能力")
+            if analysis:
+                self.say(task_id, "SIM_RESULT", "commander", f"💡 GLM 研判:{analysis}",
+                         {"llm": llm_status()["model"], "grounded": "knowledge-base"})
         return {"candidates": ranked, "best_candidate": best}
 
     @staticmethod
@@ -301,6 +314,14 @@ class SimulatorAgent(BaseAgent):
             BOARD.update(task_id, phase="replanning", replans=replans)
             self.say(task_id, "REPLAN_TRIGGER", "commander",
                      f"触发重规划:{trigger['detail']}({trigger['rule']})。指挥官请重新组织研判与方案生成。", trigger)
+            impact = await agent_analysis(self.name, self.role,
+                                          f"第{round_index}轮, 触发: {trigger['detail']}; 当前 B={fire['total_flp']} FLP,"
+                                          f"风 {fire['wind_speed']} m/s({fire['wind_band_label']}),"
+                                          f"本轮压制 {round(suppression_flp, 1)} FLP",
+                                          topic="重规划 风速档位 火情负荷 触发")
+            if impact:
+                self.say(task_id, "REPLAN_TRIGGER", "commander", f"💡 GLM 研判:{impact}",
+                         {"llm": llm_status()["model"], "grounded": "knowledge-base"})
         elif round_index >= cfg["time"]["max_rounds"]:
             route, conclusion = "done", f"达到最大轮次({cfg['time']['max_rounds']}),剩余 FLP {fire['total_flp']}。"
         elif active and stall_rounds >= 4:

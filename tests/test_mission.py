@@ -1,10 +1,15 @@
-"""端到端契约测试: 规则引擎数值 + 多 Agent 任务闭环(审批/重规划/资源缺口)。"""
+"""端到端契约测试: 规则引擎数值 + 多 Agent 任务闭环(审批/重规划/资源缺口)。
+
+测试强制关闭 GLM(离线确定性), 保证不依赖网络也能全绿。
+"""
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
+os.environ["FIREOPS_LLM_API_KEY"] = ""  # 测试环境禁用 LLM, 保持确定性
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.app.domain.store import BOARD  # noqa: E402

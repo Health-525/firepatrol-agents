@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createMission, getSnapshot, postApproval, subscribe } from './api'
+import { createMission, getSnapshot, llmStatus, postApproval, subscribe } from './api'
 import type { AgentMessage, AgentProfile, Scene, Snapshot } from './types'
 import { PHASE_LABEL } from './types'
 import SitMap from './components/SitMap'
@@ -8,6 +8,7 @@ import FleetPanel from './components/FleetPanel'
 import RoundTimeline from './components/RoundTimeline'
 import ApprovalCard from './components/ApprovalCard'
 import ReportCard from './components/ReportCard'
+import ChatPanel from './components/ChatPanel'
 
 interface ScenarioOption { id: string; label: string }
 
@@ -19,11 +20,13 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [llm, setLlm] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null })
   const pollRef = useRef<number | null>(null)
 
   useEffect(() => {
     fetch('/api/agents').then(r => r.json()).then(d => setAgents(d.agents)).catch(() => {})
     fetch('/api/scene').then(r => r.json()).then(setScene).catch(() => {})
+    llmStatus().then(setLlm).catch(() => {})
     fetch('/api/scenarios').then(r => r.json())
       .then(d => setScenarios(d.scenarios.map((s: any) => ({ id: s.id, label: s.label })))).catch(() => {})
   }, [])
@@ -76,6 +79,9 @@ export default function App() {
             {taskId ? '重新开始' : '开始任务'}
           </button>
           <span className={`phase phase-${phase}`}>{phaseLabel}{snapshot && snapshot.replans > 0 ? ` · 重规划×${snapshot.replans}` : ''}</span>
+          <span className={`llm-badge ${llm.connected ? 'on' : 'off'}`} title={llm.model ?? '未配置 FIREOPS_LLM_API_KEY'}>
+            {llm.connected ? `⚡ ${llm.model}` : '📴 离线规则'}
+          </span>
         </div>
       </header>
 
@@ -99,6 +105,7 @@ export default function App() {
           )}
           {snapshot?.report && <ReportCard report={snapshot.report} />}
           <FleetPanel fleet={snapshot?.fleet ?? []} plan={snapshot?.plan ?? null} />
+          <ChatPanel taskId={taskId} enabled={llm.connected} />
           <AgentPanel messages={snapshot?.messages ?? []} agents={agents} />
         </section>
       </main>

@@ -6,7 +6,7 @@ from typing import Any, Dict
 from langgraph.types import interrupt
 
 from ..agentkit.base import BaseAgent
-from ..agentkit.llm import llm_explain
+from ..agentkit.llm import agent_analysis, glm_chat, llm_status, SAFETY_RULE
 from ..domain.store import BOARD
 from ..rules import tools as R
 
@@ -19,7 +19,7 @@ class ApproverAgent(BaseAgent):
     color = "#ec4899"
     emoji = "📝"
 
-    def prepare(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def prepare(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         best = state["best_candidate"]
         candidates = state["candidates"]
@@ -55,7 +55,7 @@ class ApproverAgent(BaseAgent):
             "people_note": ("人员状态尚未确认:批准前请在审批操作中确认是否有人,或直接批准按「待复核」分支执行。"
                             if fire["people_status"] == "unknown" else None),
         }
-        # 审批中断恢复时节点会重跑: 已发布的同号请求不重复发送
+        # 审批中断恢复时节点会重跑: 已发布的同号请求不重复发送(含 GLM 调用)
         existing = BOARD.require(task_id).get("approval_request")
         if not existing or existing.get("plan_summary", {}).get("plan_id") != best["candidate_id"]:
             BOARD.update(task_id, phase="awaiting_approval", approval_request=request)
@@ -63,6 +63,18 @@ class ApproverAgent(BaseAgent):
                      f"方案已生成,等待审批。最优 {best['candidate_id']}:灭火机 {len(best.get('suppression_uavs', []))} 架 + "
                      f"{best.get('module')};{feasibility_label};预计 {best.get('time_interval', '无法给出')}。"
                      f"生成方案 ≠ 执行,确认后才会锁定资源。", request)
+            numbers = "; ".join(f"{k['name']}={k['value']}" for k in request["key_numbers"])
+            advice = await glm_chat(
+                f"{SAFETY_RULE}你是「交互审批」智能体, 职责: {self.role}。用不超过110字向指挥员给出审批建议: "
+                f"推荐批准/调整/拒绝中的哪个, 并说明最关键的理由与风险提示。",
+                f"最优方案 {best['candidate_id']}({','.join(best.get('suppression_uavs', []))},"
+                f"评分J={best.get('score', {}).get('score')},{best.get('time_interval', '无法给出')},"
+                f"{feasibility_label});支援分支 {support.get('branch')};关键数字: {numbers};"
+                f"备选: {request['alternative']};资源缺口: {best.get('gap', {}).get('message', '无')}",
+                max_tokens=180)
+            if advice:
+                self.say(task_id, "APPROVAL_REQ", "human", f"💡 GLM 审批建议:{advice}",
+                         {"llm": llm_status()["model"], "grounded": "rules-engine"})
 
         decision = interrupt(request)  # ---- LangGraph 审批中断, 等待 human ----
 
@@ -74,7 +86,7 @@ class ApproverAgent(BaseAgent):
 
     # ------------------------------------------------ 报告归档
 
-    def report(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def report(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
         rounds = state.get("rounds", [])
         fleet = state.get("fleet", [])
@@ -93,13 +105,16 @@ class ApproverAgent(BaseAgent):
             "timeline": [{"round": r["round_index"], "t_min": r["sim_minutes"], "flp": r["after_flp"],
                           "events": r["events"]} for r in rounds],
         }
-        explain = llm_explain(
-            "你是消防救援任务的报告智能体,用不超过100字总结任务结果,只允许复述给定数字。",
-            f"轮次 {len(rounds)},FLP {flp0}→{flp1},换电 {report['swaps']} 次,补水 {report['refills']} 次,重规划 {report['replans']} 次。",
-            conclusion)
         final_phase = "rejected" if state.get("route") == "rejected" else "completed"
         BOARD.update(task_id, phase=final_phase, report=report)
         self.say(task_id, "REPORT_READY", "human",
                  f"任务归档:{conclusion} 轮次 {len(rounds)},FLP {flp0}→{flp1},"
-                 f"换电 {report['swaps']} 次、补水 {report['refills']} 次、重规划 {report['replans']} 次。{explain}", report)
+                 f"换电 {report['swaps']} 次、补水 {report['refills']} 次、重规划 {report['replans']} 次。", report)
+        closing = await agent_analysis(self.name, self.role,
+                                       f"结论: {conclusion}; 轮次 {len(rounds)}; FLP {flp0}→{flp1}; "
+                                       f"换电 {report['swaps']}, 补水 {report['refills']}, 重规划 {report['replans']}",
+                                       topic="任务报告 归档 结论 复盘", max_tokens=160)
+        if closing:
+            self.say(task_id, "REPORT_READY", "human", f"💡 GLM 结案研判:{closing}",
+                     {"llm": llm_status()["model"]})
         return {"report": report, "phase": final_phase}

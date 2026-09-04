@@ -37,3 +37,18 @@ export function subscribe(
   es.onerror = () => { /* 断流由上层快照轮询兜底 */ }
   return () => es.close()
 }
+
+export async function sendChat(taskId: string, question: string): Promise<{ answer: string }> {
+  const res = await fetch(`/api/missions/${taskId}/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  })
+  if (!res.ok) throw new Error(`sendChat ${res.status}`)
+  return res.json()
+}
+
+export async function llmStatus(): Promise<{ connected: boolean; model: string | null }> {
+  const res = await fetch('/api/llm-status')
+  if (!res.ok) return { connected: false, model: null }
+  return res.json()
+}

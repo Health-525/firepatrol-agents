@@ -1,32 +1,72 @@
-"""可选 LLM 解释层 —— OpenAI 兼容接口(GLM/DeepSeek/Ollama 均可), 无配置时回落确定性模板。"""
+"""GLM 智能层(异步) —— OpenAI 兼容接口, 默认智谱 BigModel。
+
+安全原则不变: GLM 只做解释/研判/问答, 一切安全关键数字由规则引擎产出;
+提示词明确要求"只复述给定数字, 不得新增数值"; 任何失败回落确定性模板。
+"""
 from __future__ import annotations
 
 import json
 import os
-import urllib.request
 from typing import Optional
+
+import httpx
+
+
+def _cfg() -> tuple[str, str, str]:
+    base = os.environ.get("FIREOPS_LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+    key = os.environ.get("FIREOPS_LLM_API_KEY", "")
+    model = os.environ.get("FIREOPS_LLM_MODEL", "glm-4-flash")
+    return base, key, model
 
 
 def llm_available() -> bool:
-    return bool(os.environ.get("FIREOPS_LLM_API_KEY") and os.environ.get("FIREOPS_LLM_BASE_URL"))
+    return bool(_cfg()[1])
 
 
-def llm_explain(system: str, user: str, fallback: str, timeout: int = 8) -> str:
-    """LLM 只做解释性文字; 任何失败都回落到确定性 fallback, 演示永不因 LLM 中断。"""
-    if not llm_available():
-        return fallback
-    base = os.environ["FIREOPS_LLM_BASE_URL"].rstrip("/")
-    model = os.environ.get("FIREOPS_LLM_MODEL", "glm-4-flash")
+def llm_status() -> dict:
+    base, key, model = _cfg()
+    return {"connected": bool(key), "model": model if key else None,
+            "provider": "zhipu-bigmodel" if key else "offline-deterministic", "base_url": base if key else None}
+
+
+async def glm_chat(system: str, user: str, max_tokens: int = 220, temperature: float = 0.3,
+                   timeout: float = 20.0) -> Optional[str]:
+    """调用 GLM, 返回文本; 失败返回 None(调用方回落确定性模板)。"""
+    base, key, model = _cfg()
+    if not key:
+        return None
     body = json.dumps({"model": model, "messages": [
         {"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": 0.3, "max_tokens": 220}).encode()
-    request = urllib.request.Request(base + "/chat/completions", data=body,
-                                     headers={"Content-Type": "application/json",
-                                              "Authorization": f"Bearer {os.environ['FIREOPS_LLM_API_KEY']}"})
+        "temperature": temperature, "max_tokens": max_tokens})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode())
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(f"{base}/chat/completions", content=body.encode("utf-8"),
+                                         headers={"Content-Type": "application/json",
+                                                  "Authorization": f"Bearer {key}"})
+            response.raise_for_status()
+            payload = response.json()
         text = payload["choices"][0]["message"]["content"].strip()
-        return text or fallback
+        return text or None
     except Exception:
-        return fallback
+        return None
+
+
+SAFETY_RULE = ("你是森林火灾无人机调度系统的智能体。铁律: 只允许解释和复述用户提供的数据, "
+               "严禁编造或新增任何数值(FLP/SOC/时间/架次等必须来自给定数据)。")
+
+
+async def agent_analysis(agent_name: str, role: str, data_brief: str, topic: str,
+                          max_tokens: int = 200) -> Optional[str]:
+    """Agent 关键节点的 GLM 研判: 附带知识库接地片段, 输出简短研判意见。"""
+    from ..rules.knowledge import query_knowledge
+    knowledge = query_knowledge(topic, top_k=2)
+    refs = "\n".join(f"[{r['section']}] {r['text'][:180]}" for r in knowledge["results"][:2])
+    system = f"{SAFETY_RULE}你是「{agent_name}」, 职责: {role}。用不超过120字给出专业研判意见, 可引用知识库依据。"
+    user = f"当前数据:\n{data_brief}\n\n知识库参考:\n{refs or '无'}"
+    return await glm_chat(system, user, max_tokens=max_tokens)
+
+
+async def glm_explain(system: str, user: str, fallback: str, timeout: int = 8) -> str:
+    """兼容旧接口: 带确定性回落的解释调用。"""
+    result = await glm_chat(system, user, max_tokens=200, timeout=timeout)
+    return result or fallback

@@ -13,6 +13,8 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   ROUND: { label: '轮次', color: '#14b8a6' },
   REPLAN_TRIGGER: { label: '重规划', color: '#f97316' },
   REPORT_READY: { label: '报告', color: '#22c55e' },
+  HUMAN_ASK: { label: '指挥员提问', color: '#38bdf8' },
+  AGENT_REPLY: { label: '智能参谋', color: '#a78bfa' },
   INFO: { label: '通知', color: '#64748b' },
   ERROR: { label: '异常', color: '#ef4444' },
 }
@@ -37,13 +39,14 @@ export default function AgentPanel({ messages, agents }: Props) {
           const from = byId.get(m.frm) ?? { name: m.frm, color: '#64748b', emoji: '•' } as AgentProfile
           const typeMeta = TYPE_META[m.msg_type] ?? { label: m.msg_type, color: '#64748b' }
           return (
-            <div key={m.seq} className="msg">
+            <div key={m.seq} className={`msg ${m.data && (m.data as any).llm ? 'msg-llm' : ''}`}>
               <div className="msg-head">
                 <span className="msg-avatar" style={{ background: from.color + '26', color: from.color, borderColor: from.color }}>
                   {from.emoji} {from.name}
                 </span>
                 <span className="msg-arrow">→ {m.to === 'human' ? '指挥员' : m.to === 'blackboard' ? '黑板' : (byId.get(m.to)?.name ?? m.to)}</span>
                 <span className="msg-type" style={{ color: typeMeta.color, borderColor: typeMeta.color }}>{typeMeta.label}</span>
+                {m.data && (m.data as any).llm && <span className="llm-chip">GLM</span>}
                 <span className="msg-seq">#{m.seq}</span>
               </div>
               <div className="msg-body">{m.content}</div>

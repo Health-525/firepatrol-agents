@@ -320,6 +320,8 @@ def plan_evacuation_route(start: Tuple[int, int], goal: Tuple[int, int], blocked
 
 # ---------------------------------------------------------------- Tool 注册表
 
+from .knowledge import knowledge_stats, query_knowledge  # noqa: E402
+
 TOOLS: Dict[str, Any] = {
     "resolve_wind_band": resolve_wind_band, "resolve_slope_factor": resolve_slope_factor,
     "cell_flp": cell_flp, "build_fire_grid": build_fire_grid, "agent_kappa": agent_kappa,
@@ -329,4 +331,5 @@ TOOLS: Dict[str, Any] = {
     "check_hard_constraints": check_hard_constraints, "simulate_round": simulate_round,
     "net_capability": net_capability, "score_plan": score_plan,
     "fast_simulate_candidate": fast_simulate_candidate, "plan_evacuation_route": plan_evacuation_route,
+    "query_knowledge": query_knowledge, "knowledge_stats": knowledge_stats,
 }

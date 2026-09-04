@@ -7,3 +7,5 @@ frontend/dist/
 .npm-cache/
 reports/
 .DS_Store
+.env
+*.tsbuildinfo

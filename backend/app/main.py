@@ -11,9 +11,12 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import config  # noqa: F401  # 加载 .env(GLM 密钥, 不入库), 必须先于其他模块
 from .agents import AGENTS
+from .agentkit.llm import SAFETY_RULE, glm_chat, llm_status
 from .domain import scenarios
 from .domain.store import BOARD
+from .rules import knowledge
 from .rules import tools as R
 from .services.mission import SERVICE
 
@@ -26,10 +29,69 @@ class MissionCreate(BaseModel):
     image_name: str = "default"
 
 
-class ApprovalDecision(BaseModel):
-    decision: str  # approve | reject | adjust
-    feedback: str = ""
-    people_status: str | None = None
+class ChatQuestion(BaseModel):
+    question: str
+
+
+@app.get("/api/llm-status")
+async def llm_status_endpoint():
+    return llm_status()
+
+
+@app.get("/api/knowledge")
+async def knowledge_endpoint(query: str = "", top_k: int = 3):
+    """知识库 Tool 的 HTTP 暴露: 三份内置文档(规则/思路/论文)的分块检索。"""
+    if query:
+        return knowledge.query_knowledge(query, top_k=top_k)
+    return knowledge.knowledge_stats()
+
+
+def _mission_brief(task_id: str) -> str:
+    snap = BOARD.snapshot(task_id)
+    fire = snap.get("fire") or {}
+    plan = snap.get("plan") or {}
+    cand = plan.get("candidate") or {}
+    rounds = snap.get("rounds") or []
+    last = rounds[-1] if rounds else {}
+    fleet_line = "; ".join(f"{u['uav_id']}({u['status']},SOC {u['soc']:.0f}%,架次{u.get('sorties', 0)})"
+                           for u in (snap.get("fleet") or []))
+    inv = snap.get("inventory") or {}
+    return (f"阶段: {snap['phase']}; 重规划 {snap['replans']} 次\n"
+            f"火情: B={fire.get('total_flp', '—')} FLP, 增长 {fire.get('growth_flp_per_hour', '—')} FLP/h, "
+            f"风 {fire.get('wind_speed', '—')} m/s({fire.get('wind_band_label', '—')}), 人员 {fire.get('people_status', '—')}\n"
+            f"方案: {plan.get('plan_id', '—')} 灭火机 {cand.get('suppression_uavs', [])} "
+            f"{cand.get('module', '')}, 预计 {plan.get('estimated_control_time', '—')}\n"
+            f"轮次: {len(rounds)}, 最新 B={last.get('after_flp', '—')}, 事件 {last.get('events', [])[:3]}\n"
+            f"机群: {fleet_line}\n"
+            f"库存: 水 {inv.get('water_liters', '—')}L, W20模块 {inv.get('water_modules_w20', '—')}, "
+            f"电池 {inv.get('battery_packs', '—')}组")
+
+
+@app.post("/api/missions/{task_id}/chat")
+async def mission_chat(task_id: str, payload: ChatQuestion):
+    """指挥员问答: GLM 基于黑板实时数据 + 内置知识库回答; 数字仍以规则引擎为准。"""
+    try:
+        BOARD.require(task_id)
+    except KeyError:
+        raise HTTPException(404, "mission not found")
+    question = payload.question.strip()
+    if not question:
+        raise HTTPException(400, "question 不能为空")
+    BOARD.post_message(task_id, "HUMAN_ASK", "human", "commander", question)
+    brief = _mission_brief(task_id)
+    refs = knowledge.query_knowledge(question, top_k=2)
+    knowledge_text = "\n".join(f"[{r['source_name']}·{r['section']}] {r['text'][:200]}" for r in refs["results"])
+    answer = await glm_chat(
+        f"{SAFETY_RULE}你是「火巡智策」指挥中心的智能参谋。回答指挥员关于当前任务的问题: "
+        f"优先依据任务实时数据, 其次引用知识库(团队规则/思路/PWM-Net论文), 没有的信息就明说没有。不超过160字。",
+        f"任务实时数据:\n{brief}\n\n知识库检索:\n{knowledge_text or '无相关片段'}\n\n指挥员提问: {question}",
+        max_tokens=260)
+    if not answer:
+        answer = (f"(GLM 未接入, 确定性回答)当前阶段 {BOARD.snapshot(task_id)['phase']}。"
+                  + brief.replace("\n", "; "))
+    message = BOARD.post_message(task_id, "AGENT_REPLY", "commander", "human", answer,
+                                 {"llm": llm_status()["model"] if answer else None, "grounded": "blackboard+knowledge"})
+    return {"answer": answer, "message": message.model_dump(), "llm": llm_status()}
 
 
 @app.get("/api/health")
