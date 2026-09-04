@@ -131,7 +131,8 @@ async def scene():
 
 @app.get("/api/scenarios")
 async def scenario_list():
-    return {"scenarios": [{"id": key, **value} for key, value in scenarios.SCENARIOS.items()]}
+    presets = [{"id": key, **value} for key, value in scenarios.SCENARIOS.items()]
+    return {"scenarios": [{"id": "random", "label": "🎲 随机火情 · 每局不同(Agent 自主研判)"}] + presets}
 
 
 @app.get("/api/fleet")
@@ -146,8 +147,8 @@ async def inventory():
 
 @app.post("/api/missions")
 async def create_mission(payload: MissionCreate):
-    if payload.scenario not in scenarios.SCENARIOS:
-        raise HTTPException(400, f"未知场景 {payload.scenario}, 可选: {list(scenarios.SCENARIOS)}")
+    if payload.scenario != "random" and payload.scenario not in scenarios.SCENARIOS:
+        raise HTTPException(400, f"未知场景 {payload.scenario}, 可选: random 或 {list(scenarios.SCENARIOS)}")
     task_id = await SERVICE.start(payload.scenario, payload.image_name)
     return {"task_id": task_id, "snapshot": BOARD.snapshot(task_id)}
 

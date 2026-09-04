@@ -126,6 +126,7 @@ class SimulatorAgent(BaseAgent):
         round_index = state.get("round_index", 0) + 1
         round_events: List[str] = []
         suppression_flp = 0.0
+        action_minutes = 5.0  # 本轮真实时长: 并行取各机动作的最大耗时, 下限 5 分钟
 
         by_id = {u["uav_id"]: u for u in fleet}
         cap = R.suppression_capability(module, fire["fire_type"], fire["wind_speed"])
@@ -153,6 +154,7 @@ class SimulatorAgent(BaseAgent):
                     uav["status"] = "available"
                     uav["position"] = dict(base)
                     round_events.append(f"{uid} 返航周转换电,SOC→95%,恢复待命")
+                    action_minutes = max(action_minutes, cfg["charging"]["battery_swap_minutes"])
                 else:
                     uav["soc"] = min(100.0, uav["soc"] + R.charge_soc(0, round_minutes))
                     uav["status"] = "charging"
@@ -171,7 +173,8 @@ class SimulatorAgent(BaseAgent):
                     uav["refills"] += 1
                     uav["status"] = "servicing"
                     uav["position"] = dict(base)
-                    round_events.append(f"{uid} 基地补水 {quantity}L(4 min,本轮回合为补给轮)")
+                    round_events.append(f"{uid} 基地补水 {quantity}L(本轮回合为补给轮)")
+                    action_minutes = max(action_minutes, cfg["refill_minutes"]["base"])
                     continue  # 时间一致性: 一轮一事, 补给轮不出动
                 elif module == "co2_6kg" and inventory["co2_modules_c6"] >= 1:
                     inventory["co2_modules_c6"] -= 1
@@ -179,7 +182,8 @@ class SimulatorAgent(BaseAgent):
                     uav["refills"] += 1
                     uav["status"] = "servicing"
                     uav["position"] = dict(base)
-                    round_events.append(f"{uid} 更换 CO₂ 模块(5 min,本轮回合为补给轮)")
+                    round_events.append(f"{uid} 更换 CO₂ 模块(本轮回合为补给轮)")
+                    action_minutes = max(action_minutes, cfg["module_swap_minutes"])
                     continue
                 else:
                     uav["status"] = "fault"
@@ -190,13 +194,16 @@ class SimulatorAgent(BaseAgent):
                 if self._take_pack(inventory):
                     uav["soc"] = cfg["charging"]["battery_swap_soc"]
                     uav["swaps"] += 1
-                    round_events.append(f"{uid} 换电(5 min,SOC→95%,本轮回合为换电轮)")
+                    round_events.append(f"{uid} 换电(本轮回合为换电轮)")
+                    action_minutes = max(action_minutes, cfg["charging"]["battery_swap_minutes"])
                     continue  # 一轮一事: 换电轮不出动
                 else:
                     uav["status"] = "returning"
                     round_events.append(f"{uid} SOC 不足且无备用电池,返航")
                     continue
-            # 执行架次
+            # 执行架次(时长=往返飞行+喷洒, 按起飞前位置计算)
+            dist_now = R.distance_m(uav["position"], center)
+            action_minutes = max(action_minutes, 2 * R.flight_minutes(dist_now, uav["speed_mps"]) + spray["minutes"])
             uav["soc"] = round(uav["soc"] - sortie_soc, 2)
             uav["soc_cost_total"] = round(uav["soc_cost_total"] + sortie_soc, 2)
             uav["agent_remaining"] = round(uav["agent_remaining"] - quantity, 2)
@@ -336,8 +343,10 @@ class SimulatorAgent(BaseAgent):
         elif before > 0 and fire["total_flp"] > before * (1 + R.sim_config()["triggers"]["flp_growth_ratio"]):
             trigger = {"type": "flp_growth", "detail": f"火情负荷上升超过 20%", "rule": "FLP↑>20% → 强制重规划"}
 
+        sim_minutes = state.get("sim_minutes", 0.0) + action_minutes
         record = {
-            "round_index": round_index, "sim_minutes": round_index * round_minutes,
+            "round_index": round_index, "sim_minutes": round(sim_minutes, 1),
+            "duration_min": round(action_minutes, 1),
             "before_flp": before, "growth_flp": result["growth_flp"],
             "suppression_flp": round(suppression_flp, 2), "after_flp": fire["total_flp"],
             "wind_speed": wind_speed,
@@ -383,7 +392,7 @@ class SimulatorAgent(BaseAgent):
 
         await asyncio.sleep(demo["round_interval_ms"] / 1000)  # 演示节奏
         out = {"round_index": round_index, "rounds": rounds, "fleet": fleet, "inventory": inventory,
-               "fire": fire, "route": route, "stall_rounds": stall_rounds}
+               "fire": fire, "route": route, "stall_rounds": stall_rounds, "sim_minutes": round(sim_minutes, 1)}
         if conclusion:
             out["conclusion"] = conclusion
         return out

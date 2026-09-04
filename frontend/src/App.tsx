@@ -17,7 +17,7 @@ export default function App() {
   const [agents, setAgents] = useState<AgentProfile[]>([])
   const [scene, setScene] = useState<Scene | null>(null)
   const [scenarios, setScenarios] = useState<ScenarioOption[]>([])
-  const [scenario, setScenario] = useState('wind_shift')
+  const [scenario, setScenario] = useState('random')
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)

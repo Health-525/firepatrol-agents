@@ -21,7 +21,10 @@ class CommanderAgent(BaseAgent):
 
     async def handle(self, state: Dict[str, Any]) -> Dict[str, Any]:
         task_id = state["task_id"]
-        scenario = scen.SCENARIOS.get(state.get("scenario", "standard"), scen.SCENARIOS["standard"])
+        if state.get("scenario") == "random":
+            scenario = scen.build_random_scenario(state["task_id"])  # 任务 ID 做种子, 可复现
+        else:
+            scenario = scen.SCENARIOS.get(state.get("scenario", "standard"), scen.SCENARIOS["standard"])
         scene = R.load_json("data/scene.json")
         fleet = R.load_json("data/fleet.json")["uavs"]
         for uav in fleet:  # 执行期统计字段统一初始化

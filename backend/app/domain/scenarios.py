@@ -1,6 +1,12 @@
-"""演示场景预设: 初始火情网格/增长率/人员状态/风况脚本。"""
+"""场景: 随机火情生成(默认) + 演示剧本预设。
+
+随机火情: 起火点/强度/蔓延形状/增长率/风况/人员状态全部随机(种子可复现),
+随后由 Agent 链自主研判 —— 系统不预知答案。
+"""
 from __future__ import annotations
 
+import hashlib
+import random
 from typing import Any, Dict
 
 SCENARIOS: Dict[str, Dict[str, Any]] = {
@@ -54,3 +60,40 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "wind_shift": None,
     },
 }
+
+
+def build_random_scenario(seed: str) -> Dict[str, Any]:
+    """从任务种子生成随机火情: 随机起火点 + 下风向簇状蔓延 + 随机强度/增长/风况/人员。"""
+    rng = random.Random(f"fire-{seed}")
+    # 起火点: 避开基地一角(左下)与地图边缘
+    cx = rng.randint(5, 18)
+    cy = rng.randint(4, 12)
+    # 初始强度(加权): 小火多、大火少
+    intensity = rng.choices([1, 2, 3, 4], weights=[25, 35, 28, 12])[0]
+    # 蔓延: 主导风向 315°(西北风) -> 火向东南扩散
+    spread_dirs = [(1, 1), (1, 0), (0, 1), (1, -1)]
+    cells = [{"cx": cx, "cy": cy, "intensity": intensity}]
+    target_cells = 2 + intensity  # 3~6 格
+    guard = 0
+    while len(cells) < target_cells and guard < 40:
+        guard += 1
+        base = rng.choice(cells)
+        dx, dy = rng.choice(spread_dirs)
+        nxt = {"cx": base["cx"] + dx, "cy": base["cy"] + dy}
+        if not (1 <= nxt["cx"] <= 18 and 1 <= nxt["cy"] <= 12):
+            continue
+        if any(c["cx"] == nxt["cx"] and c["cy"] == nxt["cy"] for c in cells):
+            continue
+        nxt["intensity"] = max(1, min(4, intensity + rng.choice([-1, 0, 0, 1])))
+        cells.append(nxt)
+    growth = round((1.5 + rng.random() * 1.5) * intensity, 1)          # 1.5~3 x 强度 FLP/h
+    wind = round(2.5 + rng.random() * 4.5, 1)                          # 2.5~7 m/s
+    people = rng.choices(["confirmed", "absent", "unknown"], weights=[50, 30, 20])[0]
+    wind_series = {}
+    if rng.random() < 0.45:                                            # 45% 概率发生风变
+        shift_round = rng.randint(2, 5)
+        wind_series = {str(shift_round): round(min(9.0, wind + 1.5 + rng.random() * 1.8), 1)}
+    label = f"随机火情 · {intensity} 级 · 风 {wind} m/s · {'有' if people == 'confirmed' else ('无' if people == 'absent' else '待确认')}人"
+    return {"label": label, "fire_cells": cells, "growth_flp_per_hour": growth,
+            "people_status": people, "wind_speed": wind, "fire_type": "vegetation",
+            "wind_series": wind_series, "random": True}
