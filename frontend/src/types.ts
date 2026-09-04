@@ -75,6 +75,7 @@ export interface Snapshot {
   messages: AgentMessage[]
   approval_request: ApprovalRequest | null
   report: Record<string, any> | null
+  support_plan?: { branch?: string; evacuation?: Evacuation; support?: Array<Record<string, any>>; recon?: Array<Record<string, any>> } | null
 }
 
 export interface ApprovalRequest {
@@ -115,7 +116,21 @@ export interface Scene {
   water_sources: Array<{ id: string; name: string; x: number; y: number }>
   roads: Array<{ id: string; name: string; points: number[][] }>
   restricted_cells: Array<{ cx: number; cy: number }>
+  exits?: Array<{ id: string; name: string; x: number; y: number }>
+  people_zones?: Array<{ id: string; name: string; cx: number; cy: number; people: number }>
   map: { width_m: number; height_m: number; cell_m: number }
+}
+
+export interface Evacuation {
+  found: boolean
+  exit: string | null
+  path: Array<{ cx: number; cy: number; x: number; y: number }>
+  walk_minutes: number | null
+  climb_m: number
+  progress_cells: number
+  evacuated: boolean
+  people: number
+  text?: string
 }
 
 export interface PhaseStepperProps {

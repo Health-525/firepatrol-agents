@@ -305,3 +305,8 @@ ul.kv li.gap b { color: var(--danger); }
   .agents-strip { grid-template-columns: repeat(3, 1fr); }
   .canvas-wrap { min-height: 380px; }
 }
+
+/* ============ 语音广播开关 ============ */
+.voice-btn { padding: 5px 12px; font-size: 11.5px; border-radius: 999px; }
+.voice-btn.on { color: #ffd9a0; border-color: var(--ember-dim); background: #2a1f0e; }
+.voice-btn.on:hover { border-color: var(--ember); }

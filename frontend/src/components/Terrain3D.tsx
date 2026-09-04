@@ -391,6 +391,50 @@ export default function Terrain3D({ scene, snapshot, terrain }: Props) {
         }
       }
     }
+    // 疏散层: 贴地亮线路线 + 人群标记(3 个小球, 沿路线移动)
+    const evac = (snapshot as any)?.support_plan?.evacuation
+    if (evac && evac.path && evac.path.length > 1) {
+      const routePts: THREE.Vector3[] = evac.path.map((pt: any) =>
+        new THREE.Vector3(...((): [number, number, number] => {
+          const [wx, wz] = toWorld(terrain, pt.x, pt.y)
+          return [wx, elev(terrain, pt.x, pt.y) * EX + 8, wz]
+        })()))
+      let routeLine = core.dynamic.getObjectByName('evac-route') as THREE.Line | undefined
+      const routeGeo = new THREE.BufferGeometry().setFromPoints(routePts)
+      if (!routeLine) {
+        routeLine = new THREE.Line(routeGeo, new THREE.LineDashedMaterial({
+          color: '#5eead4', transparent: true, opacity: 0.95, dashSize: 26, gapSize: 14 }))
+        routeLine.name = 'evac-route'
+        core.dynamic.add(routeLine)
+      } else {
+        routeLine.geometry.dispose()
+        routeLine.geometry = routeGeo
+      }
+      routeLine.computeLineDistances()
+      let crowd = core.dynamic.getObjectByName('evac-crowd') as THREE.Group | undefined
+      if (!crowd) {
+        crowd = new THREE.Group()
+        crowd.name = 'evac-crowd'
+        const personMat = new THREE.MeshStandardMaterial({ color: '#ffb066', emissive: '#ff8c3a', emissiveIntensity: 0.7 })
+        for (let k = 0; k < 3; k++) {
+          const person = new THREE.Mesh(new THREE.CapsuleGeometry(4, 9, 3, 8), personMat)
+          person.position.x = (k - 1) * 10
+          crowd.add(person)
+        }
+        core.dynamic.add(crowd)
+      }
+      crowd.visible = !evac.evacuated
+      const idx = Math.min(Math.floor(evac.progress_cells || 0), evac.path.length - 1)
+      const pt = evac.path[idx]
+      const [cwx, cwz] = toWorld(terrain, pt.x, pt.y)
+      crowd.position.set(cwx, elev(terrain, pt.x, pt.y) * EX + 12, cwz)
+    } else {
+      const oldRoute = core.dynamic.getObjectByName('evac-route')
+      if (oldRoute) core.dynamic.remove(oldRoute)
+      const oldCrowd = core.dynamic.getObjectByName('evac-crowd')
+      if (oldCrowd) core.dynamic.remove(oldCrowd)
+    }
+
     // 四旋翼无人机: 机身+机臂+旋翼(旋转)+光标+编号牌
     const seen = new Set<string>()
     for (const uav of snapshot?.fleet ?? []) {

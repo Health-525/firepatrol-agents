@@ -216,8 +216,10 @@ class SimulatorAgent(BaseAgent):
                 uav["position"] = {"x": center["x"] + 60, "y": center["y"] - 60, "z": assignment.get("alt_m", 60)}
                 uav["target"] = center
 
-        # --- 支援子群: 有人分支通信悬停 / 无人分支物流运送
-        for assignment in state.get("support_plan", {}).get("support", []):
+        # --- 支援子群: 有人分支(语音引导+人群沿疏散路线移动) / 无人分支物流运送
+        support_plan = state.get("support_plan") or {}
+        evac = dict(support_plan.get("evacuation") or {})
+        for assignment in support_plan.get("support", []):
             uav = by_id.get(assignment["uav_id"])
             if not uav or uav["status"] == "fault":
                 continue
@@ -225,7 +227,21 @@ class SimulatorAgent(BaseAgent):
                 rate = R.uav_mode_rate(uav, loaded=False, hover=True)
                 uav["soc"] = round(max(0, uav["soc"] - R.delta_soc(rate, round_minutes)), 2)
                 uav["status"] = "working"
-                uav["position"] = {"x": center["x"] - 120, "y": center["y"] + 120, "z": 80}
+                if evac.get("path"):
+                    # S1 悬停在人群上空, 广播跟随引导
+                    here = evac["path"][min(int(float(evac.get("progress_cells", 0))), len(evac["path"]) - 1)]
+                    uav["position"] = {"x": here["x"] + 80, "y": here["y"] - 80, "z": 80}
+                else:
+                    uav["position"] = {"x": center["x"] - 120, "y": center["y"] + 120, "z": 80}
+                uav["target"] = uav["position"]
+                if round_index == 1:
+                    round_events.append(f"{uav['uav_id']} 升空至人员区上空,开启语音广播引导疏散")
+            elif assignment.get("mode") == "route_cover":
+                rate = R.uav_mode_rate(uav, loaded=False, hover=True)
+                uav["soc"] = round(max(0, uav["soc"] - R.delta_soc(rate, round_minutes)), 2)
+                uav["status"] = "working"
+                mid = (evac.get("path") or [center])[len(evac.get("path", [center])) // 2]
+                uav["position"] = {"x": mid["x"], "y": mid["y"], "z": 60}
                 uav["target"] = uav["position"]
             elif assignment.get("mode") == "logistics":
                 fsp = state["environment"]["forward_supply_point"]
@@ -267,6 +283,39 @@ class SimulatorAgent(BaseAgent):
             fire["wind_band"] = band["band"]
             fire["wind_band_label"] = band["label"]
 
+        # --- 疏散推进: 人群沿 A* 路线移动; 火情封锁路径时改道并再次语音广播
+        if evac.get("path") and not evac.get("evacuated"):
+            from ..rules.evacuation import advance_people, plan_evacuation as plan_evac
+            blocked = [c for c in fire["cells"] if c["flp"] > 5]
+            still_safe = all(not any(c["cx"] == p["cx"] and c["cy"] == p["cy"] for c in blocked) for p in evac["path"])
+            if not still_safe:
+                zone = (state["environment"].get("people_zones") or [{}])[0]
+                reroute = plan_evac(state["environment"], fire["cells"], zone)
+                if reroute["found"] and reroute.get("path") != evac["path"]:
+                    old_exit = evac["exit"]
+                    evac.update({"exit": reroute["exit"], "path": reroute["path"],
+                                 "walk_minutes": reroute["walk_minutes"], "climb_m": reroute["climb_m"],
+                                 "progress_cells": 0})
+                    round_events.append(f"火情封锁原疏散路线,已改道至 {reroute['exit']}(约 {reroute['walk_minutes']} 分钟)")
+                    self.say(task_id, "EVAC_BROADCAST", "human",
+                             f"🔊 注意:原路线已被火情封锁!请立即改道,沿新路线向 {reroute['exit']} 撤离,"
+                             f"全程约 {reroute['walk_minutes']} 分钟,S1 将继续在上空引导。",
+                             {"evacuation": {"exit": reroute["exit"], "path": reroute["path"], "reroute": True}})
+                elif not reroute["found"]:
+                    round_events.append("疏散路线全部被封锁,S1 引导人员原地避险等待增援")
+            progress, done, here = advance_people(evac, round_minutes)
+            evac["progress_cells"] = progress
+            if done and not evac.get("evacuated"):
+                evac["evacuated"] = True
+                round_events.append(f"人员已全部抵达 {evac['exit']},疏散完成")
+                self.say(task_id, "EVAC_BROADCAST", "human",
+                         f"🔊 疏散完成:{evac.get('people', '全体')}名人员已安全抵达 {evac['exit']}。",
+                         {"evacuation": {"evacuated": True}})
+            elif here and round_index % 2 == 0:
+                round_events.append(f"疏散进行中:人群位于 ({here['cx']},{here['cy']}),距出口约 "
+                                    f"{max(0, len(evac['path']) - 1 - int(progress))} 格")
+            support_plan["evacuation"] = evac
+
         # --- 火情轮次演化: B_(t+dt) = max(0, B + G*dt/60 - ΣS)
         before = fire["total_flp"]
         cell_growth = fire["growth_flp_per_hour"] * round_minutes / 60 / max(len(fire["cells"]), 1)
@@ -299,7 +348,7 @@ class SimulatorAgent(BaseAgent):
             "inventory": copy.deepcopy(inventory), "events": round_events,
         }
         rounds = state.get("rounds", []) + [record]
-        BOARD.update(task_id, fire=fire, fleet=fleet, inventory=inventory, rounds=rounds, round_index=round_index)
+        BOARD.update(task_id, fire=fire, fleet=fleet, inventory=inventory, rounds=rounds, round_index=round_index, support_plan=support_plan)
         events_text = "; ".join(round_events) if round_events else "常规轮次"
         self.say(task_id, "ROUND", "blackboard",
                  f"第 {round_index} 轮(t+{round_index * round_minutes:.0f} min):B {before}→{fire['total_flp']} FLP,"

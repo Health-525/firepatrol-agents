@@ -21,6 +21,8 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [voiceOn, setVoiceOn] = useState(true)
+  const spokenRef = useRef<number>(-1)
   const [llm, setLlm] = useState<{ connected: boolean; model: string | null; degraded?: boolean; last_error?: string | null }>({ connected: false, model: null })
   const [terrain, setTerrain] = useState<TerrainModel | null>(null)
   const pollRef = useRef<number | null>(null)
@@ -35,6 +37,24 @@ export default function App() {
       .then(d => setScenarios(d.scenarios.map((s: any) => ({ id: s.id, label: s.label })))).catch(() => {})
     return () => window.clearInterval(llmTimer)
   }, [])
+
+  useEffect(() => {
+    // 语音发号令: 疏散广播(浏览器 TTS, zh-CN)
+    if (!voiceOn || !snapshot) return
+    const broadcasts = snapshot.messages.filter(m => m.msg_type === 'EVAC_BROADCAST')
+    const last = broadcasts[broadcasts.length - 1]
+    if (last && last.seq !== spokenRef.current) {
+      spokenRef.current = last.seq
+      try {
+        const utterance = new SpeechSynthesisUtterance(last.content.replace(/🔊/g, '').replace(/S1 号机/g, 'S1号机'))
+        utterance.lang = 'zh-CN'
+        utterance.rate = 1.05
+        utterance.pitch = 1.0
+        window.speechSynthesis.cancel()
+        window.speechSynthesis.speak(utterance)
+      } catch { /* 浏览器不支持 TTS 时静默 */ }
+    }
+  }, [snapshot, voiceOn])
 
   useEffect(() => {
     if (!taskId) return
@@ -95,6 +115,10 @@ export default function App() {
           </select>
           <button className="primary" onClick={startMission} disabled={busy || (!!taskId && !['completed', 'rejected', 'error'].includes(phase))}>
             {taskId ? '重新开始' : '开始任务'}
+          </button>
+          <button className={`voice-btn ${voiceOn ? 'on' : ''}`} onClick={() => setVoiceOn(v => !v)}
+                  title={voiceOn ? '语音广播已开启(点击静音)' : '语音广播已静音(点击开启)'}>
+            {voiceOn ? '🔊 广播' : '🔇 静音'}
           </button>
           <span className={`llm-badge ${llm.connected ? (llm.degraded ? 'degraded' : 'on') : 'off'}`}
                 title={llm.degraded ? `连续失败: ${llm.last_error ?? ''}` : (llm.model ?? '未配置 FIREOPS_LLM_API_KEY')}>
