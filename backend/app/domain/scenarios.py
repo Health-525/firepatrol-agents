@@ -45,6 +45,18 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "fire_type": "vegetation",
         "wind_shift": None,
     },
+    # 就地取水: 远端火情 + 基地水剂受限 -> 基地补水耗尽后按规则 5.3 回退到东麓溪流就地取水
+    "water_source": {
+        "label": "远端火情 · 就地取水",
+        "fire_cells": [{"cx": 16, "cy": 4, "intensity": 3}, {"cx": 17, "cy": 4, "intensity": 3},
+                        {"cx": 16, "cy": 5, "intensity": 2}],
+        "growth_flp_per_hour": 6.0,
+        "people_status": "absent",
+        "wind_speed": 4.2,
+        "fire_type": "vegetation",
+        "wind_shift": None,
+        "inventory_override": {"water_liters": 40, "water_modules_w20": 2},
+    },
     # 单机失能: 执行中外生机电故障 → 补位决策(方案内换机) + 每轮研判裁决
     # B=216(9格x24), 增长 12/h: 第 3 轮必然仍在燃烧, 失能落在压制中段(非剧本点名单, 受害机按方案实时选定)
     "equip_failure": {

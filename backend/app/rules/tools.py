@@ -130,6 +130,17 @@ def uav_mode_rate(uav: Dict[str, Any], loaded: bool, hover: bool = False) -> flo
     return table["cruise_loaded"] if loaded else table["cruise_empty"]
 
 
+def loaded_cruise_rate(uav: Dict[str, Any], module_mass_kg: float) -> float:
+    """载荷差异巡航速率(规则 4.1 载荷修正): r = r_empty x (1 + 0.45 x m/M)。
+
+    表内 cruise_loaded 是满载(m=M)标定值; 水剂模块 22kg 与 CO₂ 模块 14kg 满载程度不同,
+    去程巡航按实际模块质量修正, 不再共用同一个"满载"速率(E 机 M=25kg:
+    水 22kg -> 258.3%/h, CO₂ 14kg -> 231.7%/h, 满载 25kg -> 268.3%/h)。
+    """
+    base = float(sim_config()["energy"][uav["subgroup"]]["cruise_empty"])
+    return round(energy_rate(base, task_mass=module_mass_kg, capacity_mass=uav["payload_capacity_kg"]), 1)
+
+
 def distance_m(a: Dict[str, float], b: Dict[str, float]) -> float:
     return math.hypot(b["x"] - a["x"], b["y"] - a["y"])
 
@@ -157,6 +168,130 @@ def charge_soc(soc: float, minutes: float, mode: str = "base") -> float:
 def battery_swap() -> Dict[str, Any]:
     c = sim_config()["charging"]
     return {"minutes": c["battery_swap_minutes"], "soc_after": c["battery_swap_soc"], "requires_battery_pack": True}
+
+
+# ---------------------------------------------------------------- 就地取水(规则 5.2 / 5.3)
+
+def segment_crosses_cells(a: Dict[str, float], b: Dict[str, float], fire_cells: List[Dict[str, Any]],
+                          cell_m: float = 100.0, step_m: float = 25.0, flp_threshold: float = 5.0) -> bool:
+    """直线航段是否穿越高风险火情网格(水源取水路线先决条件之一)。
+
+    起点格(无人机所在的火场格)与终点格(水源格)不计: 离开火场必然经过当前着火格。
+    """
+    blocked = {(c["cx"], c["cy"]) for c in (fire_cells or []) if c.get("flp", 0) >= flp_threshold}
+    if not blocked:
+        return False
+    start_cell = (int(a["x"] // cell_m), int(a["y"] // cell_m))
+    end_cell = (int(b["x"] // cell_m), int(b["y"] // cell_m))
+    dist = distance_m(a, b)
+    steps = max(1, int(dist / step_m))
+    for i in range(steps + 1):
+        t = i / steps
+        x, y = a["x"] + (b["x"] - a["x"]) * t, a["y"] + (b["y"] - a["y"]) * t
+        cell = (int(x // cell_m), int(y // cell_m))
+        if cell in blocked and cell not in {start_cell, end_cell}:
+            return True
+    return False
+
+
+def plan_water_source(module: str, fire_pos: Dict[str, float], base: Dict[str, float],
+                      water_sources: List[Dict[str, Any]], uav: Optional[Dict[str, Any]],
+                      fire_cells: Optional[List[Dict[str, Any]]] = None,
+                      saving_threshold_min: float = 5.0) -> Dict[str, Any]:
+    """就地取水决策(规则 5.3): 对每个水源做 前置条件 / 往返SOC / 与基地补给的省时对比。
+
+    周期口径: 无人机喷洒完毕位于火场, 补给周期 = 火→补给点 + 灌装 + 补给点→火。
+    全部条件满足(可用/安全到达/容量≥20L/路线不穿高风险格/往返后 SOC≥25%/省时≥5min)
+    才选水源; 否则基地补水, 并保留合格水源作为基地断供时的回退。
+    """
+    cfg = sim_config()
+    quantity = cfg["spray"][module]["quantity"]
+    if module != "water_20l":
+        return {"module": module, "mode": "base", "source": None, "options": [], "fallback_sources": [],
+                "note": "CO₂ 模块只能在基地整模块更换, 无就地灌装条件",
+                "reason": "药剂类型不支持就地取水"}
+    if not uav:
+        return {"module": module, "mode": "base", "source": None, "options": [], "fallback_sources": [],
+                "note": "无可用灭火机, 不评估水源", "reason": "无机"}
+
+    fill_base = float(cfg["refill_minutes"]["base"])
+    fill_src = float(cfg["refill_minutes"]["water_source"])
+    d_base = distance_m(fire_pos, base)
+    t_base = flight_minutes(d_base, uav["speed_mps"])
+    rate_empty = uav_mode_rate(uav, loaded=False)
+    rate_loaded = loaded_cruise_rate(uav, cfg["spray"][module]["module_mass_kg"])
+    soc_base_cycle = round(delta_soc(rate_empty, t_base) + delta_soc(rate_loaded, t_base), 2)
+    base_option = {"kind": "base", "id": "base", "name": base.get("name", "基地"), "x": base["x"], "y": base["y"],
+                   "distance_m": round(d_base, 0), "fill_minutes": fill_base,
+                   "cycle_minutes": round(2 * t_base + fill_base, 1), "soc_after_cycle": round(float(uav["soc"]) - soc_base_cycle, 1),
+                   "eligible": True, "vetoes": []}
+
+    options = [base_option]
+    viable: List[Dict[str, Any]] = []
+    fallback: List[Dict[str, Any]] = []
+    for src in water_sources or []:
+        vetoes: List[str] = []
+        if not src.get("available", False):
+            vetoes.append("水源不可用")
+        if not src.get("safe_access", False):
+            vetoes.append("水源接近不安全")
+        capacity = float(src.get("capacity_liters", 0))
+        if capacity < quantity:
+            vetoes.append(f"剩余水量 {capacity:.0f}L < {quantity:.0f}L")
+        pos = {"x": src["x"], "y": src["y"]}
+        d_src = distance_m(fire_pos, pos)
+        t_src = flight_minutes(d_src, uav["speed_mps"])
+        if segment_crosses_cells(fire_pos, pos, fire_cells or []):
+            vetoes.append("取水路线穿越高风险网格")
+        soc_src = round(float(uav["soc"]) - delta_soc(rate_empty, t_src) - delta_soc(rate_loaded, t_src), 1)
+        if soc_src < RETURN_SOC:
+            vetoes.append(f"往返后 SOC {soc_src:.0f}% < {RETURN_SOC:.0f}%")
+        cycle_src = round(2 * t_src + fill_src, 1)
+        saving = round(base_option["cycle_minutes"] - cycle_src, 1)
+        # 硬性先决(可用/安全/容量/路线/SOC)与省时门槛分层: 前者不满足永远排除,
+        # 后者只决定"平时是否值得绕行", 基地断供时仍可作为回退(规则 5.3 补救链: 更换水源)
+        hard_ok = not vetoes
+        saving_ok = saving >= saving_threshold_min
+        option = {"kind": "source", "id": src["id"], "name": src.get("name", src["id"]), "x": src["x"], "y": src["y"],
+                  "distance_m": round(d_src, 0), "fill_minutes": fill_src, "cycle_minutes": cycle_src,
+                  "saving_minutes": saving, "soc_after_cycle": soc_src,
+                  "capacity_remaining": capacity, "eligible": hard_ok and saving_ok, "vetoes": vetoes,
+                  "saving_note": "" if saving_ok else f"省时 {saving:.1f} min 未达 {saving_threshold_min:.0f} min 门槛, 仅作断供回退"}
+        options.append(option)
+        if hard_ok and saving_ok:
+            viable.append(option)
+        elif hard_ok:
+            fallback.append(option)
+
+    plan: Dict[str, Any] = {"module": module, "quantity_per_refill": quantity, "options": options}
+    if viable:
+        chosen = min(viable, key=lambda o: o["cycle_minutes"])
+        plan.update({"mode": "water_source", "source": chosen,
+                     "note": f"就地取水:{chosen['name']}(省时 {chosen['saving_minutes']} min/周期, 往返 SOC {chosen['soc_after_cycle']}%)",
+                     "reason": f"{chosen['name']} 周期 {chosen['cycle_minutes']} min, 比基地 {base_option['cycle_minutes']} min 省 {chosen['saving_minutes']} min(≥{saving_threshold_min:.0f} min), 全部先决条件通过"})
+        fallback = [o for o in fallback if o["id"] != chosen["id"]]
+    else:
+        src_notes = "; ".join(f"{o['name']}: {'、'.join(o['vetoes']) or o['saving_note']}" for o in options if o["kind"] == "source")
+        plan.update({"mode": "base", "source": None,
+                     "note": "基地补水(水源省时不足 5 min 或先决条件不满足, 合格水源保留为断供回退)",
+                     "reason": src_notes or "场景无水源"})
+    # 回退水源: 基地水剂断供时按周期从短到长启用(容量随取水实时扣减)
+    plan["fallback_sources"] = sorted(fallback, key=lambda o: o["cycle_minutes"])
+    return plan
+
+
+def refill_providers(water_source_plan: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """有序补给来源链: 选定水源(若 mode=water_source) -> 基地库存 -> 回退水源。
+
+    预演与执行器共用本顺序, 保证评分口径与实际轮次一致; base 的水剂/模块库存由调用方校验。
+    """
+    plan = water_source_plan or {}
+    providers: List[Dict[str, Any]] = []
+    if plan.get("mode") == "water_source" and plan.get("source"):
+        providers.append(plan["source"])
+    providers.append({"kind": "base", "id": "base"})
+    providers.extend(plan.get("fallback_sources") or [])
+    return providers
 
 
 # ---------------------------------------------------------------- 硬约束
@@ -236,16 +371,24 @@ def score_plan(control_minutes: Optional[float], residual_flp: float, fire_flp: 
 def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_per_hour: float,
                             module: str, fire_type: str, wind_speed: float, inventory: Dict[str, Any],
                             fire_pos: Dict[str, float], base_pos: Dict[str, float],
-                            round_minutes: float = 5, max_rounds: int = 24) -> Dict[str, Any]:
-    """对单个灭火机组合做 5 分钟离散预演: 补给、换电、返航硬约束, 输出控制时间与消耗供评分。"""
+                            round_minutes: float = 5, max_rounds: int = 24,
+                            water_source_plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """对单个灭火机组合做 5 分钟离散预演: 补给(基地/就地取水)、换电、返航硬约束, 输出控制时间与消耗供评分。"""
     cfg = sim_config()
     spray = cfg["spray"][module]
+    module_mass = float(spray["module_mass_kg"])
     quantity, spray_minutes = spray["quantity"], float(spray["minutes"])
     refill = cfg["refill_minutes"]["base"]
     swap = battery_swap()
     cap = suppression_capability(module, fire_type, wind_speed)
     eff = cap["effective_flp"]
-    water_left = min(inventory.get("water_liters", 0) / quantity, inventory.get("water_modules_w20", 0)) if module == "water_20l" else inventory.get("co2_modules_c6", 0)
+    # 补给来源链: 就地取水决策 + 基地库存 + 回退水源(与执行器同序)
+    base_water_left = (min(inventory.get("water_liters", 0) / quantity, inventory.get("water_modules_w20", 0))
+                       if module == "water_20l" else inventory.get("co2_modules_c6", 0))
+    providers = refill_providers(water_source_plan) if module == "water_20l" else [{"kind": "base"}]
+    src_stock = {o["id"]: float(o.get("capacity_remaining", 0)) / quantity for o in providers if o.get("kind") == "source"}
+    refill_cycle = ((water_source_plan or {}).get("source") or {}).get("cycle_minutes", refill) \
+        if (water_source_plan or {}).get("mode") == "water_source" else refill
     packs_left = float(inventory.get("battery_packs", 0)) + sum(
         p.get("battery_packs", 0) for p in inventory.get("forward_supply_points", []) if p.get("id") == "fsp-1")
     growth_per_round = growth_per_hour * round_minutes / 60.0
@@ -254,8 +397,8 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
     for uav in uavs:
         dist = distance_m(uav["position"], fire_pos)
         out_min = flight_minutes(dist, uav["speed_mps"])
-        # 去程满载; 若航段爬升超过 30m(如基地105m→火场195m), 按 f_climb 上浮去程速率
-        rate_out = climb_adjusted_rate(uav_mode_rate(uav, loaded=True),
+        # 去程按实际模块质量做载荷修正(水22kg/CO₂14kg 速率不同); 爬升超 30m 再按 f_climb 上浮
+        rate_out = climb_adjusted_rate(loaded_cruise_rate(uav, module_mass),
                                        uav["position"]["x"], uav["position"]["y"], fire_pos["x"], fire_pos["y"])
         rate_back = uav_mode_rate(uav, loaded=False)
         soc_out = delta_soc(rate_out, out_min)
@@ -280,10 +423,21 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
                 continue
             # 时间一致性: 一轮一事 —— 补给轮/换电轮不出动, 与执行器口径一致
             if d["agent"] < quantity:
-                if water_left >= 1:
-                    water_left -= 1; d["agent"] = quantity; d["refills"] += 1
+                refilled = False
+                for provider in providers:
+                    if provider.get("kind") == "source":
+                        if src_stock.get(provider["id"], 0) >= 1:
+                            src_stock[provider["id"]] -= 1
+                            refilled = True
+                            break
+                    elif base_water_left >= 1:
+                        base_water_left -= 1
+                        refilled = True
+                        break
+                if refilled:
+                    d["agent"] = quantity; d["refills"] += 1
                 else:
-                    d["state"] = "out_of_agent"; stalled = stalled or "agent_insufficient"; continue
+                    d["state"] = "out_of_agent"; stalled = stalled or "agent_insufficient"
                 continue
             if d["soc"] - d["sortie_soc"] < RETURN_SOC:
                 if packs_left >= 1:
@@ -303,7 +457,7 @@ def fast_simulate_candidate(uavs: List[Dict[str, Any]], fire_flp: float, growth_
             break
     controlled = load <= 0.01
     # 墙钟估计: 多机并行, 取最慢无人机 —— 首架次 11 分钟量级, 后续每周期(补给+换电+架次)约 20 分钟(规则 11.3 口径)
-    cycle = round(refill + swap["minutes"] + (drones[0]["sortie_minutes"] if drones else 11), 1)
+    cycle = round(refill_cycle + swap["minutes"] + (drones[0]["sortie_minutes"] if drones else 11), 1)
     slowest_cycles = max(d["sorties"] for d in drones) if drones else 0
     control_minutes = round((drones[0]["sortie_minutes"] if drones else 0) + max(0, slowest_cycles - 1) * cycle, 1) if controlled else None
     return {"controlled": controlled, "control_minutes": control_minutes, "rounds_used": rounds_used,
@@ -344,8 +498,11 @@ TOOLS: Dict[str, Any] = {
     "resolve_wind_band": resolve_wind_band, "resolve_slope_factor": resolve_slope_factor,
     "cell_flp": cell_flp, "build_fire_grid": build_fire_grid, "agent_kappa": agent_kappa,
     "suppression_capability": suppression_capability, "energy_rate": energy_rate, "delta_soc": delta_soc,
-    "soc_need": soc_need, "uav_mode_rate": uav_mode_rate, "distance_m": distance_m,
+    "soc_need": soc_need, "uav_mode_rate": uav_mode_rate, "loaded_cruise_rate": loaded_cruise_rate,
+    "distance_m": distance_m,
     "flight_minutes": flight_minutes, "charge_soc": charge_soc, "battery_swap": battery_swap,
+    "plan_water_source": plan_water_source, "segment_crosses_cells": segment_crosses_cells,
+    "refill_providers": refill_providers,
     "check_hard_constraints": check_hard_constraints, "simulate_round": simulate_round,
     "net_capability": net_capability, "score_plan": score_plan,
     "fast_simulate_candidate": fast_simulate_candidate, "plan_evacuation_route": plan_evacuation_route,

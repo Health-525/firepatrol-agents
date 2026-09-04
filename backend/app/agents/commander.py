@@ -34,6 +34,9 @@ class CommanderAgent(BaseAgent):
             uav.setdefault("soc_cost_total", 0.0)
             uav.setdefault("target", None)
         inventory = R.load_json("data/inventory.json")
+        # 场景库存覆盖(如就地取水演示: 基地水剂受限, 迫使补给链走向水源)
+        if scenario.get("inventory_override"):
+            inventory.update(scenario["inventory_override"])
         # 真值隐藏: 火从 t=0 已存在, 但系统"看不见"—— 先派 R 机巡航搜索
         ignition_cell = scenario["fire_cells"][0]
         truth = {"cx": ignition_cell["cx"], "cy": ignition_cell["cy"],
@@ -55,8 +58,8 @@ class CommanderAgent(BaseAgent):
             "search_legs_done": 0, "search_detected": False,
         }
 
-    def decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """审批中断恢复后的仲裁: approve 锁资源进入执行; reject 归档终止; adjust 带约束回到方案生成。"""
+    async def decide(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """审批中断恢复后的仲裁: approve 锁资源进入执行(人员状态有变先重生成支援分支); reject 归档终止; adjust 带约束回到方案生成。"""
         task_id = state["task_id"]
         approval = state.get("approval") or {}
         decision = approval.get("decision", "reject")
@@ -70,11 +73,29 @@ class CommanderAgent(BaseAgent):
                 BOARD.update(task_id, phase="completed")
                 self.say(task_id, "INFO", "approver", "方案无可派遣灭火机(资源缺口),任务按缺口结论归档。")
                 return {"route": "done", "conclusion": "当前资源无法控制火情,已输出资源缺口,未执行灭火。"}
+            # 审批确认的人员状态优先于侦察初判: 变化时必须重生成支援分支再锁资源,
+            # 否则"待复核"分支会带着旧方案一路执行到底(缺陷修复)
+            fire = state.get("fire") or {}
+            extra: Dict[str, Any] = {}
+            if people_override in {"confirmed", "absent"} and fire.get("people_status") != people_override:
+                fire = dict(fire, people_status=people_override)
+                BOARD.update(task_id, fire=fire)
+                from .graph import SUPPORT  # 运行时导入, 避免模块级循环依赖
+                result = await SUPPORT.handle({**state, "fire": fire})
+                support_plan = result["support_plan"]
+                state["support_plan"] = support_plan
+                # 人工确认写入状态: 后续 adjust/重规划走重建路径时不再回退到场景初判
+                extra = {"fire": fire, "support_plan": support_plan, "people_override": people_override}
+                branch_label = {"people": "有人(通信中继+疏散指引)", "logistics": "无人(物流补给)",
+                                "verify": "待复核"}.get(support_plan.get("branch"), support_plan.get("branch"))
+                self.say(task_id, "TASK_ASSIGN", "support",
+                         f"人员状态经审批确认更新为 {people_override},支援保障 Agent 已重新分支 → {branch_label}。"
+                         f"灭火方案不变, 支援编成按新分支锁定。")
             plan = self._lock_plan(state)
             BOARD.update(task_id, phase="executing", plan=plan, fleet=state["fleet"])
             self.say(task_id, "INFO", "simulator",
                      f"方案 {plan['plan_id']} 已批准并锁定资源。仿真评估 Agent,开始按 5 分钟轮次驱动执行。")
-            return {"plan": plan, "route": "next_round", "fleet": state["fleet"]}
+            return {"plan": plan, "route": "next_round", "fleet": state["fleet"], **extra}
 
         if decision == "adjust":
             max_drones = None

@@ -43,7 +43,8 @@ class SimulatorAgent(BaseAgent):
             uavs = [fleet[uid] for uid in cand["suppression_uavs"]]
             sim = R.fast_simulate_candidate(uavs, fire["total_flp"], fire["growth_flp_per_hour"],
                                             cand["module"], fire["fire_type"], fire["wind_speed"],
-                                            inventory, state["fire_center"], base)
+                                            inventory, state["fire_center"], base,
+                                            water_source_plan=cand.get("water_source_plan"))
             score = R.score_plan(sim["control_minutes"], sim["residual_flp"], fire["total_flp"],
                                  sim["energy_total"], len(uavs), sim["material_used"],
                                  sim["swaps"] + sim["refills"])
@@ -185,16 +186,15 @@ class SimulatorAgent(BaseAgent):
                         round_events.append(f"{uid} 基地充电中({uav['soc']:.0f}%)")
                 continue
             if uav["agent_remaining"] < quantity:
-                if module == "water_20l" and inventory["water_liters"] >= quantity and inventory["water_modules_w20"] >= 1:
-                    inventory["water_liters"] -= quantity
-                    inventory["water_modules_w20"] -= 1
-                    uav["agent_remaining"] = quantity
-                    uav["refills"] += 1
-                    uav["status"] = "servicing"
-                    uav["position"] = dict(base)
-                    round_events.append(f"{uid} 基地补水 {quantity}L(本轮回合为补给轮)")
-                    action_minutes = max(action_minutes, cfg["refill_minutes"]["base"])
-                    continue  # 时间一致性: 一轮一事, 补给轮不出动
+                if module == "water_20l":
+                    # 补给决策链: 就地取水(选定水源) → 基地补水 → 回退水源(规则 5.2/5.3)
+                    spent = self._refill_water(uav, plan, inventory, base, round_events)
+                    if spent is not None:
+                        action_minutes = max(action_minutes, spent)
+                        continue  # 时间一致性: 一轮一事, 补给轮不出动
+                    uav["status"] = "fault"
+                    round_events.append(f"{uid} 水剂补给链耗尽(基地库存与水源容量均不足),停止出动")
+                    continue
                 elif module == "co2_6kg" and inventory["co2_modules_c6"] >= 1:
                     inventory["co2_modules_c6"] -= 1
                     uav["agent_remaining"] = quantity
@@ -410,7 +410,7 @@ class SimulatorAgent(BaseAgent):
         await asyncio.sleep(demo["round_interval_ms"] / 1000)  # 演示节奏
         out = {"round_index": round_index, "rounds": rounds, "fleet": fleet, "inventory": inventory,
                "fire": fire, "route": route, "stall_rounds": stall_rounds, "sim_minutes": round(sim_minutes, 1),
-               "support_plan": support_plan,
+               "support_plan": support_plan, "plan": plan,
                "failure_applied": bool(state.get("failure_applied")) or bool(failed_ids)}
         if conclusion:
             out["conclusion"] = conclusion
@@ -589,11 +589,51 @@ class SimulatorAgent(BaseAgent):
         return False
 
     @staticmethod
+    def _refill_water(uav: Dict[str, Any], plan: Dict[str, Any], inventory: Dict[str, Any],
+                      base: Dict[str, float], round_events: List[str]) -> float | None:
+        """水剂补给决策链(规则 5.2/5.3): 选定水源(就地取水) → 基地 → 回退水源。
+
+        返回该补给轮耗时(转场+灌装); 整链不可用返回 None(调用方判停)。
+        水源容量直接在方案对象上扣减就地取水量, 与黑板同步。
+        """
+        cfg = R.sim_config()
+        quantity = cfg["spray"]["water_20l"]["quantity"]
+        for provider in R.refill_providers(plan.get("water_source_plan")):
+            if provider.get("kind") == "source":
+                if float(provider.get("capacity_remaining", 0)) < quantity:
+                    continue
+                pos = {"x": provider["x"], "y": provider["y"]}
+                transit = R.flight_minutes(R.distance_m(uav["position"], pos), uav["speed_mps"])
+                # 往返 SOC 先决: 飞抵水源即击穿返航储备则换下一来源
+                soc_after = uav["soc"] - R.delta_soc(R.uav_mode_rate(uav, loaded=False), transit)
+                if soc_after < RETURN_SOC:
+                    continue
+                provider["capacity_remaining"] = round(float(provider["capacity_remaining"]) - quantity, 1)
+                uav["agent_remaining"] = quantity
+                uav["refills"] += 1
+                uav["status"] = "servicing"
+                uav["position"] = {"x": provider["x"], "y": provider["y"], "z": 0}
+                round_events.append(f"{uav['uav_id']} 就地取水 {quantity:.0f}L({provider['name']},"
+                                    f"水源剩余 {provider['capacity_remaining']:.0f}L)")
+                return transit + cfg["refill_minutes"]["water_source"]
+            if inventory["water_liters"] >= quantity and inventory["water_modules_w20"] >= 1:
+                transit = R.flight_minutes(R.distance_m(uav["position"], base), uav["speed_mps"])
+                inventory["water_liters"] -= quantity
+                inventory["water_modules_w20"] -= 1
+                uav["agent_remaining"] = quantity
+                uav["refills"] += 1
+                uav["status"] = "servicing"
+                uav["position"] = dict(base)
+                round_events.append(f"{uav['uav_id']} 基地补水 {quantity:.0f}L(本轮回合为补给轮)")
+                return transit + cfg["refill_minutes"]["base"]
+        return None
+
+    @staticmethod
     def _sortie_soc(uav: Dict[str, Any], spray: Dict[str, Any], center: Dict[str, float]) -> float:
         dist = R.distance_m(uav["position"], center)
         out_min = R.flight_minutes(dist, uav["speed_mps"])
-        # 去程爬升耗电(f_climb): 高差 >30m 的航段速率上浮(地形数据接入能耗)
-        rate_out = R.climb_adjusted_rate(R.uav_mode_rate(uav, loaded=True),
+        # 去程按实际模块质量做载荷修正(水 22kg/CO₂ 14kg 速率不同); 爬升超 30m 航段再上浮(地形接入能耗)
+        rate_out = R.climb_adjusted_rate(R.loaded_cruise_rate(uav, spray["module_mass_kg"]),
                                          uav["position"]["x"], uav["position"]["y"], center["x"], center["y"])
         rate_back = R.uav_mode_rate(uav, loaded=False)
         hover = R.sim_config()["energy"]["suppression"]["hover_spray"]

@@ -93,6 +93,7 @@ export interface ApprovalRequest {
     support_branch: string
     support: Array<Record<string, any>>
     recon: Array<Record<string, any>>
+    water_source_note?: string | null
   }
   alternative: { plan_id: string; score: number; time_interval: string; suppression_uavs: string[] } | null
   key_numbers: Array<{ name: string; value: any; source: string }>

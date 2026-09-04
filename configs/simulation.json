@@ -2,7 +2,7 @@
   "schema_version": "sim-v1",
   "time": { "internal_step_minutes": 1, "round_minutes": 5, "max_rounds": 40 },
   "demo": { "round_interval_ms": 1500, "replan_round": 3, "replan_wind_mps": 6.8 },
-  "grid": { "cell_m2": 100, "cols": 20, "rows": 14, "width_m": 2000, "height_m": 1400 },
+  "grid": { "cell_m": 100, "cell_m2": 10000, "cols": 20, "rows": 14, "width_m": 2000, "height_m": 1400 },
   "wind_bands": [
     { "max_mps": 4.0, "k_wind": 1.0, "label": "0–4 m/s", "weather_efficiency": 1.0 },
     { "max_mps": 6.0, "k_wind": 1.2, "label": "4–6 m/s", "weather_efficiency": 0.85 },

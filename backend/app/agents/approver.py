@@ -43,6 +43,7 @@ class ApproverAgent(BaseAgent):
                 "resource_gap": best.get("gap", {}),
                 "support_branch": support.get("branch"), "support": support.get("support", []),
                 "recon": support.get("recon", []),
+                "water_source_note": (best.get("water_source_plan") or {}).get("note"),
             },
             "alternative": {"plan_id": alternative["candidate_id"], "score": alternative["score"]["score"],
                             "time_interval": alternative.get("time_interval"),

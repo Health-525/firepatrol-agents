@@ -27,6 +27,7 @@ export default function ApprovalCard({ request, busy, onDecide }: Props) {
             <li><span>可行性</span><b>{p.feasibility_label}</b></li>
             <li><span>评分 J(越小越优)</span><b>{p.score}</b></li>
             <li><span>支援分支</span><b>{{ people: '有人:通信+指引', logistics: '无人:物流', verify: '待复核' }[p.support_branch] ?? p.support_branch}</b></li>
+            {p.water_source_note && <li><span>水剂补给</span><b>{p.water_source_note}</b></li>}
             {gap.message && <li className="gap"><span>资源缺口</span><b>{gap.message}</b></li>}
           </ul>
         </div>
@@ -55,7 +56,7 @@ export default function ApprovalCard({ request, busy, onDecide }: Props) {
         )}
         <input placeholder="调整意见,如:最多出动 2 架" value={feedback} onChange={e => setFeedback(e.target.value)} />
         <button className="primary" disabled={busy} onClick={() => onDecide('approve', feedback, people || null)}>批准执行</button>
-        <button disabled={busy || !feedback.trim()} onClick={() => onDecide('adjust', feedback)}>调整</button>
+        <button disabled={busy || (!feedback.trim() && !people)} onClick={() => onDecide('adjust', feedback, people || null)}>调整</button>
         <button className="danger" disabled={busy} onClick={() => onDecide('reject')}>拒绝</button>
       </div>
       <div className="approval-note">生成方案 ≠ 执行:批准后才会锁定无人机资源并进入 5 分钟轮次仿真。</div>

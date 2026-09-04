@@ -624,7 +624,7 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
     ctx.fillText('等待任务 · 选择演练场景并点击「开始任务」', px(W / 2), py(H / 2) - 8)
     ctx.fillStyle = 'rgba(143, 163, 154, 0.4)'
     ctx.font = '10.5px Consolas, monospace'
-    ctx.fillText('紫金山北麓演示林区 · 2000m × 1400m · 100m² 网格', px(W / 2), py(H / 2) + 14)
+    ctx.fillText('紫金山北麓演示林区 · 2000m × 1400m · 100m×100m 网格(每格 10000 m²)', px(W / 2), py(H / 2) + 14)
     ctx.textAlign = 'left'
   }
 }

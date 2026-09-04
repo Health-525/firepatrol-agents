@@ -70,6 +70,10 @@ def build_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
     evac = ((state.get("support_plan") or {}).get("evacuation")) or {}
     round_index = state.get("round_index", 0)
     last_replan = state.get("last_replan_round")
+    # 就地取水补给链: 基地水剂断供但水源仍有量时, 断供只算 watch(补给链已切换), 不再触发重规划
+    ws = plan.get("water_source_plan") or {}
+    ws_sources = ([ws.get("source")] if ws.get("mode") == "water_source" else []) + (ws.get("fallback_sources") or [])
+    ws_available = sum(float(o.get("capacity_remaining", 0) or 0) for o in ws_sources if o)
     return {
         "round_index": round_index,
         "sim_minutes": state.get("sim_minutes", 0.0),
@@ -96,7 +100,9 @@ def build_snapshot(state: Dict[str, Any]) -> Dict[str, Any]:
                       "battery_packs": inventory.get("battery_packs"),
                       "fsp_battery_packs": sum(p.get("battery_packs", 0)
                                                for p in inventory.get("forward_supply_points", [])
-                                               if p.get("id") == "fsp-1")},
+                                               if p.get("id") == "fsp-1"),
+                      "water_source_available_liters": round(ws_available, 1),
+                      "water_source_active": bool(ws_sources)},
         "people": {"status": fire.get("people_status"),
                    "support_branch": (state.get("support_plan") or {}).get("branch"),
                    "evac_progress_cells": evac.get("progress_cells"),
@@ -193,7 +199,13 @@ def conservative_judgment(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         anomalies.append({"name": "turnaround_stall", "severity": "watch",
                           "detail": f"灭火机连续 {snapshot['stall_rounds']} 轮处于返航/充电周转"})
     if plan.get("module") == "water_20l" and (inv["water_modules_w20"] or 0) < 1:
-        anomalies.append({"name": "water_supply_out", "severity": "urgent", "detail": "W20 水剂模块库存耗尽"})
+        if (inv.get("water_source_available_liters") or 0) >= 20:
+            anomalies.append({"name": "water_supply_switched", "severity": "watch",
+                              "detail": f"基地 W20 模块耗尽, 补给链已切换就地取水(水源剩余 "
+                                        f"{inv['water_source_available_liters']:.0f}L)"})
+        else:
+            anomalies.append({"name": "water_supply_out", "severity": "urgent",
+                              "detail": "W20 水剂库存耗尽且水源不可用"})
     if plan.get("module") == "co2_6kg" and (inv["co2_modules_c6"] or 0) < 1:
         anomalies.append({"name": "co2_supply_out", "severity": "urgent", "detail": "C6 CO₂ 模块库存耗尽"})
     trapped_under_guidance = False
