@@ -105,7 +105,7 @@ button.danger { border-color: #7f3b2c; color: #f2b8a5; }
 }
 
 /* ============ KPI 数据条 ============ */
-.kpi-bar { flex: 0 0 auto; display: grid; grid-template-columns: 1.4fr repeat(7, 1fr); gap: 8px; }
+.kpi-bar { flex: 0 0 auto; display: grid; grid-template-columns: 1.5fr repeat(3, 1fr); gap: 10px; }
 .kpi {
   background: linear-gradient(180deg, var(--panel2), var(--panel));
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 7px;
@@ -122,29 +122,6 @@ button.danger { border-color: #7f3b2c; color: #f2b8a5; }
 .kpi span { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
 .kpi b.idle { color: #4a5c54; animation: breathe 2.4s infinite; }
 @keyframes breathe { 50% { opacity: 0.45; } }
-
-/* ============ Agent 条 ============ */
-.agents-strip { flex: 0 0 auto; display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-.agent-chip {
-  display: flex; align-items: center; gap: 8px; background: var(--panel);
-  border: 1px solid var(--line); border-left-width: 3px; border-radius: 8px;
-  padding: 5px 10px; font-size: 12px; min-width: 0; position: relative;
-  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-}
-.agent-chip.speaking { background: #1a2620; box-shadow: 0 0 12px #34d3991c; }
-.chip-face {
-  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 14px; flex-shrink: 0; border: 1px solid var(--line);
-}
-.agent-chip b { display: block; font-size: 12px; white-space: nowrap; }
-.agent-chip small { color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-.chip-body { min-width: 0; }
-.speaking-wave { margin-left: auto; display: flex; gap: 2px; align-items: flex-end; height: 14px; }
-.speaking-wave i { width: 2.5px; background: var(--ok); border-radius: 1px; animation: wave 1s infinite ease-in-out; }
-.speaking-wave i:nth-child(1) { height: 5px; animation-delay: 0s; }
-.speaking-wave i:nth-child(2) { height: 11px; animation-delay: 0.18s; }
-.speaking-wave i:nth-child(3) { height: 7px; animation-delay: 0.36s; }
-@keyframes wave { 50% { transform: scaleY(0.35); } }
 
 /* ============ 主区布局 ============ */
 .layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 430px; gap: 10px; }
@@ -171,17 +148,9 @@ button.danger { border-color: #7f3b2c; color: #f2b8a5; }
 }
 .canvas-wrap { flex: 1 1 auto; min-height: 240px; position: relative; }
 .canvas-wrap canvas { width: 100%; height: 100%; display: block; }
-.legend { display: flex; gap: 14px; padding: 6px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; flex: 0 0 auto; flex-wrap: wrap; }
-.legend .lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
-.legend .lg.fire { background: radial-gradient(circle, #f6c26b, #b91c1c); }
-.legend .lg.water { background: #57a8c9; border-radius: 50%; }
-.legend .lg.fsp { background: #d9b44a; }
 
 .timeline { flex: 0 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .tl-svg { width: 100%; display: block; max-height: 165px; }
-.tl-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); letter-spacing: 0; }
-.lg-line { display: inline-block; width: 14px; height: 2.5px; background: #e07856; border-radius: 2px; margin-left: 8px; }
-.lg-dot-warn { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); margin-left: 6px; }
 
 /* ============ 三维地形 ============ */
 .terrain-wrap { position: relative; }
@@ -324,9 +293,6 @@ ul.kv li.gap b { color: var(--danger); }
 ::-webkit-scrollbar-thumb { background: #223630; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #31493f; }
 
-@media (max-width: 1450px) {
-  .kpi-bar { grid-template-columns: repeat(4, 1fr); }
-}
 @media (max-width: 1280px) {
   .header { gap: 10px; }
   .stepper { order: 3; flex-basis: 100%; justify-content: flex-start; }

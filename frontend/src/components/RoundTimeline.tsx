@@ -26,13 +26,12 @@ export default function RoundTimeline({ rounds }: Props) {
 
   return (
     <div className="timeline">
-      <div className="panel-title">轮次演化 · FLP 曲线
+      <div className="panel-title">轮次演化 · FLP
         {last && (
           <span className="fire-stat">
             第 {last.round_index} 轮 · B <b>{last.before_flp}</b>→<b>{last.after_flp}</b> · 压制 {last.suppression_flp}
           </span>
         )}
-        <span className="tl-legend"><i className="lg-line" />FLP <i className="lg-dot-warn" />换电/风变</span>
       </div>
       {rounds.length === 0
         ? <div className="empty tl-empty">方案获批后, 火情负荷 B 将按 5 分钟轮次在此逐轮演化</div>

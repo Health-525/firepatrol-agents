@@ -42,33 +42,25 @@ export default function SitMap({ scene, snapshot, terrain }: Props) {
   const fire = snapshot?.fire
   return (
     <div className="sitmap">
-      <div className="panel-title">林区态势{mode === '3d' ? ' · 三维地形模型' : ' · 100 m² 网格 + FLP 热度'}
-        {fire && (
-          <span className="fire-stat">
-            B<sub>总</sub> = <b>{fire.total_flp}</b> FLP · 风 {fire.wind_speed} m/s({fire.wind_band_label}) · 人员 {fire.people_status}
-          </span>
-        )}
+      <div className="panel-title">林区态势{mode === '3d' ? ' · 三维模型' : ' · 网格平面'}
         <span className="view-toggle">
           <button className={mode === '3d' ? 'on' : ''} onClick={() => setMode('3d')}>🏔 模型</button>
           <button className={mode === '2d' ? 'on' : ''} onClick={() => setMode('2d')}>🗺 平面</button>
         </span>
+        {fire && (
+          <span className="fire-stat">
+            B<sub>总</sub> = <b>{fire.total_flp}</b> FLP · 风 {fire.wind_speed} m/s · 人员 {fire.people_status}
+          </span>
+        )}
       </div>
       {mode === '3d' ? (
         <div className="canvas-wrap terrain-wrap">
           <Terrain3D scene={scene} snapshot={snapshot} terrain={terrain} />
-          {terrain && <span className="terrain-src">地形: {terrain.source} · 高程 {terrain.min_elev}–{terrain.max_elev} m · 垂直夸张 ×{terrain.exaggeration} · 拖拽旋转/滚轮缩放</span>}
+          {terrain && <span className="terrain-src">紫金山实测高程 · 拖拽旋转 / 滚轮缩放</span>}
         </div>
       ) : (
         <div className="canvas-wrap"><canvas ref={canvasRef} /></div>
       )}
-      <div className="legend">
-        <span><i className="lg" style={{ background: SUBGROUP_META.reconnaissance.color }} /> 侦察 R</span>
-        <span><i className="lg" style={{ background: SUBGROUP_META.suppression.color }} /> 灭火 E</span>
-        <span><i className="lg" style={{ background: SUBGROUP_META.support.color }} /> 支援 S</span>
-        <span><i className="lg fire" /> 火情网格</span>
-        <span><i className="lg water" /> 水源</span>
-        <span><i className="lg fsp" /> 基地/补给点</span>
-      </div>
     </div>
   )
 }

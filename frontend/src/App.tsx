@@ -22,7 +22,6 @@ export default function App() {
   const [taskId, setTaskId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [llm, setLlm] = useState<{ connected: boolean; model: string | null; degraded?: boolean; last_error?: string | null }>({ connected: false, model: null })
-  const [defaults, setDefaults] = useState<{ water: number | null; packs: number | null }>({ water: null, packs: null })
   const [terrain, setTerrain] = useState<TerrainModel | null>(null)
   const pollRef = useRef<number | null>(null)
 
@@ -32,8 +31,6 @@ export default function App() {
     fetch('/api/terrain').then(r => r.json()).then(setTerrain).catch(() => {})
     llmStatus().then(setLlm).catch(() => {})
     const llmTimer = window.setInterval(() => llmStatus().then(setLlm).catch(() => {}), 10000)
-    fetch('/api/inventory').then(r => r.json())
-      .then(d => setDefaults({ water: d.water_liters, packs: d.battery_packs })).catch(() => {})
     fetch('/api/scenarios').then(r => r.json())
       .then(d => setScenarios(d.scenarios.map((s: any) => ({ id: s.id, label: s.label })))).catch(() => {})
     return () => window.clearInterval(llmTimer)
@@ -78,10 +75,8 @@ export default function App() {
   const phase = snapshot?.phase ?? 'idle'
   const fire = snapshot?.fire
   const fleet = snapshot?.fleet ?? []
-  const inv = (snapshot?.inventory ?? {}) as Record<string, any>
   const eReady = fleet.filter(u => u.subgroup === 'suppression' && !['fault', 'charging'].includes(u.status)).length
   const eTotal = fleet.filter(u => u.subgroup === 'suppression').length || 4
-  const lastRound = snapshot?.rounds?.[snapshot.rounds.length - 1]
 
   return (
     <div className="app">
@@ -90,7 +85,7 @@ export default function App() {
           <span className="logo">🔥</span>
           <div>
             <h1>火巡智策 · 多智能体调度工作台</h1>
-            <p>LangGraph × 6-Agent × 规则引擎守护安全数字{scene ? ` · ${scene.name}` : ''}</p>
+            <p>多智能体调度{scene ? ` · ${scene.name}` : ''}</p>
           </div>
         </div>
         <PhaseStepper phase={phase} replans={snapshot?.replans ?? 0} />
@@ -114,24 +109,6 @@ export default function App() {
         <div className={`kpi ${fire ? (fire.wind_band >= 2 ? 'k-danger' : 'k-ok') : ''}`}>
           <b className={fire ? '' : 'idle'}>{fire ? `${fire.wind_speed} ${fire.wind_band_label}` : '待命'}</b><span>风速 / 档位</span></div>
         <div className="kpi"><b className={fleet.length ? '' : 'idle'}>{fleet.length ? <>{eReady}<small>/{eTotal}</small></> : <>{eTotal}<small>/{eTotal}</small></>}</b><span>灭火机可用</span></div>
-        <div className="kpi"><b className={inv.water_liters != null ? '' : 'idle'}>{inv.water_liters ?? defaults.water ?? '—'} L</b><span>水剂库存</span></div>
-        <div className="kpi"><b className={inv.battery_packs != null ? '' : 'idle'}>{inv.battery_packs ?? defaults.packs ?? '—'} 组</b><span>电池组</span></div>
-        <div className="kpi"><b className={lastRound ? '' : 'idle'}>{lastRound ? `${lastRound.before_flp}→${lastRound.after_flp}` : '待任务'}</b><span>最新轮 B 变化</span></div>
-        <div className="kpi"><b className={snapshot?.messages?.length ? '' : 'idle'}>{snapshot?.messages?.length ?? 0}</b><span>协作消息</span></div>
-      </div>
-
-      <div className="agents-strip">
-        {agents.map(a => {
-          const speaking = snapshot?.messages?.length
-            ? snapshot.messages[snapshot.messages.length - 1].frm === a.agent_id : false
-          return (
-            <div key={a.agent_id} className={`agent-chip ${speaking ? 'speaking' : ''}`} style={{ borderColor: a.color + '88' }}>
-              <span className="chip-face" style={{ background: a.color + '1f' }}>{a.emoji}</span>
-              <div className="chip-body"><b style={{ color: a.color }}>{a.name}</b><small>{a.role}</small></div>
-              {speaking && <span className="speaking-wave"><i /><i /><i /></span>}
-            </div>
-          )
-        })}
       </div>
 
       <main className="layout">
