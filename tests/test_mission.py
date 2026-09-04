@@ -121,3 +121,77 @@ def test_mission_adjust_with_constraint():
         done = await _wait_phase(task_id, {"completed"}, timeout=120)
         assert done["report"]["flp_final"] <= 0.01
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------- 结案回收 & 自主补位
+
+def test_mission_end_fleet_returns_home():
+    """结案后机队必须全员返航归位: 位置=基地, 无"原地悬停"。"""
+    async def run():
+        task_id = await SERVICE.start("standard")
+        await _wait_phase(task_id, {"awaiting_approval"})
+        await SERVICE.approve(task_id, "approve")
+        done = await _wait_phase(task_id, {"completed"}, timeout=120)
+        base = done["environment"]["base"]
+        away = [u["uav_id"] for u in done["fleet"]
+                if abs(u["position"]["x"] - base["x"]) + abs(u["position"]["y"] - base["y"]) > 1.0]
+        assert not away, f"结案后仍在外的机: {away}"
+        assert {m["msg_type"] for m in done["messages"]} >= {"RECOVERY"}
+        assert all(u["status"] in {"available", "charging", "fault"} for u in done["fleet"])
+    asyncio.run(run())
+
+
+def test_rejected_mission_also_recovers_and_stays_rejected():
+    """拒绝结案的机队同样返航, 且终局 phase 仍是 rejected(不因回收改写)。"""
+    async def run():
+        task_id = await SERVICE.start("overwhelmed")
+        await _wait_phase(task_id, {"awaiting_approval"})
+        await SERVICE.approve(task_id, "reject")
+        done = await _wait_phase(task_id, {"rejected"}, timeout=60)
+        base = done["environment"]["base"]
+        away = [u["uav_id"] for u in done["fleet"]
+                if abs(u["position"]["x"] - base["x"]) + abs(u["position"]["y"] - base["y"]) > 1.0]
+        assert not away, f"拒绝结案后仍在外的机: {away}"
+    asyncio.run(run())
+
+
+def test_backfill_rule_fallback():
+    """GLM 离线时补位降级: ready_now 取 SOC 最高; 两类皆空 → none。"""
+    from backend.app.agents import backfill
+
+    candidates = {
+        "ready_now": [{"uav_id": "E3", "soc": 88, "sortie_soc": 46.2},
+                      {"uav_id": "E2", "soc": 100, "sortie_soc": 46.2}],
+        "ready_after_service": [{"uav_id": "E4", "soc": 71, "sortie_soc": 46.2}],
+    }
+    decision = asyncio.run(backfill.decide(["E1"], candidates, {"fire_total_flp": 100}))
+    assert decision["choice"] == "E2" and decision["source"] == "rule-fallback"
+    only_service = {"ready_now": [], "ready_after_service": candidates["ready_after_service"]}
+    decision = asyncio.run(backfill.decide(["E1"], only_service, {}))
+    assert decision["choice"] == "E4"
+    empty = asyncio.run(backfill.decide(["E1"], {"ready_now": [], "ready_after_service": []}, {}))
+    assert empty["choice"] == "none"
+
+
+def test_mission_equip_failure_backfills_and_completes():
+    """单机失能闭环: 第 3 轮失能 → 补位决策(方案内换机) → 不重新审批 → 火仍被扑灭 → 全员返航。"""
+    async def run():
+        task_id = await SERVICE.start("equip_failure")
+        snap = await _wait_phase(task_id, {"awaiting_approval"})
+        assert snap["fire"]["total_flp"] == 216.0  # 9 格 x 24 FLP
+        await SERVICE.approve(task_id, "approve")
+        # 失能→补位后不应再次进入审批门(方案内换机不过审批)
+        done = await _wait_phase(task_id, {"completed"}, timeout=180)
+        types = {m["msg_type"] for m in done["messages"]}
+        assert {"UAV_FAULT", "BACKFILL", "RECOVERY"} <= types
+        backfills = [m for m in done["messages"]
+                     if m["msg_type"] == "BACKFILL" and m["data"].get("choice") not in (None, "none")]
+        assert backfills, "离线降级也应产生确定性补位"
+        plan_ids = set(done["plan"]["candidate"]["suppression_uavs"])
+        assert backfills[0]["data"]["choice"] in plan_ids
+        assert done["report"]["flp_final"] <= 0.01
+        base = done["environment"]["base"]
+        away = [u["uav_id"] for u in done["fleet"]
+                if abs(u["position"]["x"] - base["x"]) + abs(u["position"]["y"] - base["y"]) > 1.0]
+        assert not away
+    asyncio.run(run())

@@ -5,12 +5,15 @@ START → 指挥官接警 → 侦察研判 → (灭火调度 ∥ 支援保障) �
       → 交互审批(interrupt 审批门) → 指挥官仲裁
           ├─ approve  → 轮次执行 → 自主研判 ─┬─ next_round → 轮次执行(环)
           │                                ├─ replan → 侦察研判(重规划环, 再次审批)
-          │                                └─ done → 报告归档 → END
+          │                                └─ done → 回收返航 → 报告归档 → END
           ├─ adjust → 侦察研判(带用户约束)
-          └─ reject → 报告归档 → END
+          └─ reject → 回收返航 → 报告归档 → END
 
 自主研判节点(judge_round): 每轮执行后由仿真评估 Agent 的 GLM 大脑对全量快照判断
 继续/重规划/终止, 无固定触发表; GLM 不可用时保守降级(见 agents/judgment.py)。
+回收节点(recover_round): 结案后机队分两拍全员返航基地, 归位后才归档——任务结束
+不是"原地悬停", 而是把机队安全带回家。
+执行中单机机电失能 → 补位决策(agents/backfill.py): 方案内换机立即生效, 不过审批门。
 """
 from __future__ import annotations
 
@@ -73,6 +76,10 @@ class MissionState(TypedDict, total=False):
     # 自主研判
     last_replan_round: int
     last_judgment: Dict[str, Any]
+    # 单机失能 / 结案回收
+    failure_applied: bool
+    recovery_phase: str
+    recovery_archive: str
 
 
 def _route_decide(state: MissionState) -> str:
@@ -95,6 +102,7 @@ def build_mission_graph():
     graph.add_node("commander_decide", COMMANDER.decide)
     graph.add_node("execute_round", SIMULATOR.execute_round)
     graph.add_node("judge_round", SIMULATOR.judge_round)
+    graph.add_node("recover", SIMULATOR.recover_round)
     graph.add_node("report", APPROVER.report)
 
     graph.add_edge(START, "commander_intake")
@@ -107,12 +115,16 @@ def build_mission_graph():
     graph.add_edge("support", "simulator")   # 汇合后统一评估
     graph.add_edge("simulator", "approver")
     graph.add_edge("approver", "commander_decide")
+    # commander_decide 的四个出口: 执行 / 带约束重规划 / 拒绝回收 / 资源缺口归档(直接 done, 机队未出动也要走回收归位)
     graph.add_conditional_edges("commander_decide", _route_decide,
-                                {"next_round": "execute_round", "adjust": "recon", "rejected": "report"})
+                                {"next_round": "execute_round", "adjust": "recon",
+                                 "rejected": "recover", "done": "recover"})
     graph.add_conditional_edges("execute_round", _route_round,
-                                {"judge": "judge_round", "done": "report"})
+                                {"judge": "judge_round", "done": "recover"})
     graph.add_conditional_edges("judge_round", _route_round,
-                                {"next_round": "execute_round", "replan": "recon", "done": "report"})
+                                {"next_round": "execute_round", "replan": "recon", "done": "recover"})
+    graph.add_conditional_edges("recover", _route_round,
+                                {"recovering": "recover", "done": "report", "rejected": "report"})
     graph.add_edge("report", END)
     return graph.compile(checkpointer=MemorySaver())
 

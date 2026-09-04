@@ -15,6 +15,11 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   REPORT_READY: { label: '报告', color: '#22c55e' },
   HUMAN_ASK: { label: '指挥员提问', color: '#38bdf8' },
   AGENT_REPLY: { label: '智能参谋', color: '#a78bfa' },
+  UAV_FAULT: { label: '单机失能', color: '#ef4444' },
+  BACKFILL: { label: '补位', color: '#f59e0b' },
+  JUDGMENT: { label: '研判', color: '#f59e0b' },
+  EVAC_BROADCAST: { label: '疏散广播', color: '#22c55e' },
+  RECOVERY: { label: '返航回收', color: '#38bdf8' },
   INFO: { label: '通知', color: '#64748b' },
   ERROR: { label: '异常', color: '#ef4444' },
 }

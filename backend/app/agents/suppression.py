@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from itertools import combinations
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from ..agentkit.base import BaseAgent
 from ..domain.store import BOARD
@@ -51,11 +51,20 @@ class SuppressionAgent(BaseAgent):
             parsed = self._parse_sizes(strategy or "", limit)
             if parsed:
                 sizes = parsed
-                strategy_note = f"LLM 决策:出动 {strategy.strip()} 架(候选 {'/'.join('C%d' % s for s in sizes)})"
+                # 全枚举对照自检: LLM 决策是约束性的, 但若全枚举最优档位不在其选择内, 自动纳入并公示
+                advisory, best_size = self._full_enum_advisory(pool, fire, module, center,
+                                                               state.get("inventory") or {}, limit)
+                covers = best_size in sizes
+                if not covers:
+                    sizes = sorted(set(sizes) | {best_size})
+                strategy_note = (f"LLM 决策:出动 {strategy.strip()} 架(候选 {'/'.join('C%d' % s for s in sizes)})"
+                                 + ("" if covers else f";全枚举最优 C{best_size} 未被覆盖, 已自动纳入对照"))
                 self.say(task_id, "PLAN_PROPOSAL", "commander",
                          f"🧠 战术决策:{strategy_note}。依据 B={fire['total_flp']}、风 {fire['wind_speed']} m/s、"
                          f"单架次 {cap['effective_flp']} FLP 与库存周转。硬约束仍由规则引擎把关。",
-                         {"llm_decision": True, "sizes": sizes, "tools": [t['tool'] for t in trace] if trace else []})
+                         {"llm_decision": True, "sizes": sizes,
+                          "covers_full_enum_optimum": covers, "full_enum_advisory": advisory,
+                          "tools": [t['tool'] for t in trace] if trace else []})
             else:
                 strategy_note = "LLM 不可用,回退全枚举(1–%d 架)" % limit
 
@@ -92,6 +101,30 @@ class SuppressionAgent(BaseAgent):
                       f"过硬约束组合: {feasible_ids or '无'};淘汰原因: {veto_reasons or '无'};"
                       f"硬约束明细: {json.dumps(candidates[-1]['checks'], ensure_ascii=False)[:400] if candidates else '[]'}")
         return {"candidates": candidates, "module": module, "capability": cap}
+
+    @staticmethod
+    def _full_enum_advisory(pool: List[Dict[str, Any]], fire: Dict[str, Any], module: str,
+                            center: Dict[str, float], inventory: Dict[str, Any],
+                            limit: int) -> Tuple[List[Dict[str, Any]], int]:
+        """全枚举对照: 对 1..limit 每档做同一套离散预演+评分, 返回(逐档结果, 最优档)。
+
+        数字全部来自规则引擎(与仿真评估同一口径), 用于公示 LLM 决策与全枚举最优的差距。
+        """
+        scene_base = R.load_json("data/scene.json")["base"]
+        advisory: List[Dict[str, Any]] = []
+        for size in range(1, limit + 1):
+            uavs = pool[:size]
+            sim = R.fast_simulate_candidate(uavs, fire["total_flp"], fire["growth_flp_per_hour"],
+                                            module, fire["fire_type"], fire["wind_speed"],
+                                            inventory, center, scene_base)
+            score = R.score_plan(sim["control_minutes"], sim["residual_flp"], fire["total_flp"],
+                                 sim["energy_total"], size, sim["material_used"],
+                                 sim["swaps"] + sim["refills"])
+            advisory.append({"size": size, "J": round(score["score"], 3),
+                             "controlled": sim["controlled"],
+                             "control_minutes": sim["control_minutes"]})
+        best_size = min(advisory, key=lambda a: a["J"])["size"] if advisory else 1
+        return advisory, best_size
 
     @staticmethod
     def _parse_sizes(text: str, limit: int) -> List[int]:

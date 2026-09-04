@@ -26,7 +26,7 @@ class Blackboard:
             "scene_id": scene_id,
             "image_name": image_name,
             "scenario": scenario,
-            "phase": "created",  # created|analyzing|awaiting_approval|executing|replanning|completed|rejected
+            "phase": "created",  # created|searching|analyzing|awaiting_approval|executing|replanning|recovering|completed|rejected
             "created_at": time.time(),
             "fire": None,
             "fleet": [],

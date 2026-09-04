@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import random
 from typing import Any, Dict, List
 
 from ..agentkit.base import BaseAgent
@@ -10,7 +11,7 @@ from ..domain.store import BOARD
 from ..rules import tools as R
 from ..rules.environment import observe_wind
 from ..rules.knowledge import query_knowledge
-from . import judgment
+from . import backfill, judgment
 
 RETURN_SOC = R.RETURN_SOC
 
@@ -133,6 +134,23 @@ class SimulatorAgent(BaseAgent):
         cap = R.suppression_capability(module, fire["fire_type"], fire["wind_speed"])
         eff = cap["effective_flp"]
 
+        # --- 外生单机失能事件: 场景只约定"第几轮可能失能", 具体哪架由当前方案实时选定(非剧本点名单)
+        failed_ids: List[str] = []
+        failure_cfg = (state.get("scenario_cfg") or {}).get("uav_failure")
+        if failure_cfg and not state.get("failure_applied") and round_index >= int(failure_cfg.get("round", 0)):
+            flying = [by_id[uid] for uid in cand["suppression_uavs"] if by_id[uid]["status"] == "working"]
+            pool_fail = flying or [by_id[uid] for uid in cand["suppression_uavs"]
+                                   if by_id[uid]["status"] != "fault"]
+            if pool_fail:
+                victim = random.Random(f"fail-{task_id}").choice(pool_fail)
+                victim["status"] = "fault"
+                victim["failure"] = True
+                failed_ids.append(victim["uav_id"])
+                round_events.append(f"{victim['uav_id']} 遥测丢失且电量骤降, 判定机电故障失能")
+                self.say(task_id, "UAV_FAULT", "commander",
+                         f"⚠️ {victim['uav_id']} 失联:遥测中断、电量骤降, 按机电故障处置, 立即评估补位。",
+                         {"faulted": victim["uav_id"], "round": round_index})
+
         # --- 全局充电恢复: 充电中的无人机(含方案外, 如 E4)按 100%/h 补能, ≥75% 恢复可用
         for uav in fleet:
             if uav["status"] == "charging":
@@ -213,6 +231,10 @@ class SimulatorAgent(BaseAgent):
             uav["position"] = dict(center)
             suppression_flp += eff
             round_events.append(f"{uid} 第 {uav['sorties']} 架次喷洒,SOC→{uav['soc']}%")
+
+        # --- 补位决策(行动权): 失能即刻定替换, 不等火涨、不过审批门——方案内换机, 目标与编成不变
+        if failed_ids:
+            await self._backfill(state, cand, by_id, spray, center, failed_ids, round_events)
 
         # --- 侦察子群: 悬停监测耗电
         for assignment in state.get("support_plan", {}).get("recon", []):
@@ -388,10 +410,137 @@ class SimulatorAgent(BaseAgent):
         await asyncio.sleep(demo["round_interval_ms"] / 1000)  # 演示节奏
         out = {"round_index": round_index, "rounds": rounds, "fleet": fleet, "inventory": inventory,
                "fire": fire, "route": route, "stall_rounds": stall_rounds, "sim_minutes": round(sim_minutes, 1),
-               "support_plan": support_plan}
+               "support_plan": support_plan,
+               "failure_applied": bool(state.get("failure_applied")) or bool(failed_ids)}
         if conclusion:
             out["conclusion"] = conclusion
         return out
+
+    # ------------------------------------------------ 补位: 失能机的替换由 Agent 决定并立即生效
+
+    async def _backfill(self, state: Dict[str, Any], cand: Dict[str, Any], by_id: Dict[str, Dict[str, Any]],
+                        spray: Dict[str, Any], center: Dict[str, float],
+                        failed_ids: List[str], round_events: List[str]) -> None:
+        """评估备用机两档门槛(立即出动 / 一轮周转后出动), 交大脑选择, 选定即改方案。
+
+        这里是 Agent 的行动权: 选择结果直接改写 plan.candidate 的编成并落黑板,
+        下一轮新机即进入架次循环——不是旁白, 失败降级为确定性规则。
+        """
+        task_id = state["task_id"]
+        inventory = state["inventory"]
+        module = cand["module"]
+        quantity = spray["quantity"]
+        tasked = set(cand["suppression_uavs"])
+        packs = int(inventory.get("battery_packs", 0)) + sum(
+            p.get("battery_packs", 0) for p in inventory.get("forward_supply_points", [])
+            if p.get("id") == "fsp-1")
+        refillable = ((module == "water_20l" and inventory.get("water_modules_w20", 0) >= 1
+                       and inventory.get("water_liters", 0) >= quantity)
+                      or (module == "co2_6kg" and inventory.get("co2_modules_c6", 0) >= 1))
+
+        ready_now: List[Dict[str, Any]] = []
+        ready_after: List[Dict[str, Any]] = []
+        for uav in state["fleet"]:
+            if uav.get("subgroup") != "suppression" or uav["uav_id"] in tasked or uav.get("failure"):
+                continue
+            if uav["status"] not in {"available", "assigned", "charging"}:
+                continue
+            entry = {"uav_id": uav["uav_id"], "soc": uav["soc"], "status": uav["status"],
+                     "agent_remaining": uav.get("agent_remaining", 0),
+                     "sortie_soc": round(self._sortie_soc(uav, spray, center), 1)}
+            if uav["soc"] - entry["sortie_soc"] >= RETURN_SOC:
+                ready_now.append(entry)
+            elif packs >= 1 and (uav.get("agent_remaining", 0) >= quantity or refillable):
+                entry["service"] = "基地换电/补给一轮后可出动"
+                ready_after.append(entry)
+        candidates = {"ready_now": sorted(ready_now, key=lambda c: -c["soc"]),
+                      "ready_after_service": sorted(ready_after, key=lambda c: -c["soc"])}
+
+        context = {"fire_total_flp": state["fire"]["total_flp"],
+                   "growth_flp_per_hour": state["fire"]["growth_flp_per_hour"],
+                   "module": module, "battery_packs": packs, "faulted": failed_ids,
+                   "round_index": state.get("round_index", 0) + 1}
+        decision = await backfill.decide(failed_ids, candidates, context)
+        choice = decision["choice"]
+        if choice in {c["uav_id"] for group in candidates.values() for c in group}:
+            spare = by_id[choice]
+            spare["status"] = "assigned"
+            spare["assigned_task"] = task_id
+            spare["target"] = center
+            cand["suppression_uavs"] = [choice if uid in failed_ids else uid
+                                        for uid in cand["suppression_uavs"]]
+            BOARD.update(task_id, plan=state["plan"], fleet=state["fleet"])
+            round_events.append(f"{choice} 受命补位, 接替 {'/'.join(failed_ids)} 的压制架次")
+            self.say(task_id, "BACKFILL", "commander",
+                     f"🔁 补位决策({decision['source']}):{'/'.join(failed_ids)} 失能 → {choice} 顶替"
+                     f"(方案内换机, 不改目标与规模, 无需重新审批)。{decision['rationale']}",
+                     {"choice": choice, "faulted": failed_ids, "source": decision["source"],
+                      "rationale": decision["rationale"], "candidates": candidates})
+        else:
+            round_events.append("无可补位备用机, 交由本轮自主研判决定重规划或降级")
+            self.say(task_id, "BACKFILL", "commander",
+                     f"🔁 补位决策({decision['source']}):无满足出动门槛的备用机;"
+                     f"{decision['rationale']}。移交本轮自主研判。",
+                     {"choice": "none", "faulted": failed_ids, "source": decision["source"]})
+
+    # ------------------------------------------------ 回收: 任务结束全员返航归位
+
+    async def recover_round(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """结案回收轮: 在外机分两拍返航(先转身、后降落), 全部归位后进入归档。
+
+        不推进火情轮次(rounds 时间线不变), 只更新机队与协作消息——目标已结案,
+        这里是"把机队安全带回家": 航程时间与耗电按规则引擎计, 机电故障机带回但停机检修。
+        """
+        cfg = R.sim_config()
+        demo = cfg["demo"]
+        task_id = state["task_id"]
+        base = state["environment"]["base"]
+        fleet = state["fleet"]
+        home = {"x": base["x"], "y": base["y"], "z": 0}
+        phase = state.get("recovery_phase")
+        # 归档路由透传: rejected 结案仍按 rejected 归档; 自循环两拍间经 recovery_archive 传递
+        archive = state.get("recovery_archive")
+        if archive not in {"done", "rejected"}:
+            archive = state.get("route") if state.get("route") in {"done", "rejected"} else "done"
+
+        airborne = [u for u in fleet if R.distance_m(u["position"], base) > 1.0]
+        if not airborne:
+            if phase != "landed":
+                self.say(task_id, "RECOVERY", "human", "任务结束,机队均在基地待命,无需返航。")
+            return {"route": archive, "recovery_phase": "landed", "recovery_archive": archive}
+
+        if phase != "landing":
+            for uav in airborne:
+                uav["status"] = "returning"
+                uav["target"] = dict(base)
+            BOARD.update(task_id, phase="recovering", fleet=fleet)
+            self.say(task_id, "RECOVERY", "human",
+                     f"任务结束,下令全员返航:{', '.join(u['uav_id'] for u in airborne)} "
+                     f"共 {len(airborne)} 架正返回基地。",
+                     {"returning": [u["uav_id"] for u in airborne]})
+            await asyncio.sleep(demo["round_interval_ms"] / 1000)
+            return {"route": "recovering", "recovery_phase": "landing", "recovery_archive": archive}
+
+        events = []
+        longest = 0.0
+        for uav in airborne:
+            dist = R.distance_m(uav["position"], base)
+            minutes = R.flight_minutes(dist, uav["speed_mps"])
+            cost = R.delta_soc(R.uav_mode_rate(uav, loaded=False), minutes)
+            uav["soc"] = round(max(0.0, uav["soc"] - cost), 2)
+            uav["soc_cost_total"] = round(uav.get("soc_cost_total", 0.0) + cost, 2)
+            uav["position"] = dict(home)
+            uav["target"] = None
+            uav["status"] = "fault" if uav.get("failure") else "available"
+            longest = max(longest, minutes)
+            note = "机电故障,降落即停机检修" if uav.get("failure") else "降落归位待命"
+            events.append(f"{uav['uav_id']} 返航 {minutes:.1f} 分钟(SOC {uav['soc']:.0f}%),{note}")
+        BOARD.update(task_id, fleet=fleet)
+        self.say(task_id, "RECOVERY", "human",
+                 f"全员返航完成:{len(airborne)} 架降落基地,最长航程 {longest:.1f} 分钟。" + ";".join(events),
+                 {"landed": [u["uav_id"] for u in airborne], "longest_minutes": round(longest, 1)})
+        await asyncio.sleep(demo["round_interval_ms"] / 1000)
+        return {"route": archive, "recovery_phase": "landed", "recovery_archive": archive}
 
     # ------------------------------------------------ 自主研判: 要不要继续, 由 Agent 大脑判断
 

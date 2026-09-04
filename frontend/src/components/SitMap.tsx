@@ -354,7 +354,7 @@ function render(ctx: CanvasRenderingContext2D, vw: number, vh: number, sc: Scene
   }
 
   // ---- 地面消防车(审批通过后沿北门巡护道前出 FSP-1; 再审批期间保持在前线) ----
-  const groundOn = !!(snap && sc && (['executing', 'replanning', 'completed'].includes(snap.phase) ||
+  const groundOn = !!(snap && sc && (['executing', 'replanning', 'recovering', 'completed'].includes(snap.phase) ||
     (snap.phase === 'awaiting_approval' && (snap.rounds?.length ?? 0) > 0)))
   const roadPts = sc?.roads?.[0]?.points
   if (groundOn && roadPts && roadPts.length >= 2 && sc) {

@@ -45,6 +45,22 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "fire_type": "vegetation",
         "wind_shift": None,
     },
+    # 单机失能: 执行中外生机电故障 → 补位决策(方案内换机) + 每轮研判裁决
+    # B=216(9格x24), 增长 12/h: 第 3 轮必然仍在燃烧, 失能落在压制中段(非剧本点名单, 受害机按方案实时选定)
+    "equip_failure": {
+        "label": "单机失能 · 自主补位",
+        "fire_cells": [{"cx": 13, "cy": 8, "intensity": 2}, {"cx": 14, "cy": 8, "intensity": 2},
+                        {"cx": 15, "cy": 8, "intensity": 2}, {"cx": 13, "cy": 9, "intensity": 2},
+                        {"cx": 14, "cy": 9, "intensity": 2}, {"cx": 15, "cy": 9, "intensity": 2},
+                        {"cx": 13, "cy": 10, "intensity": 2}, {"cx": 14, "cy": 10, "intensity": 2},
+                        {"cx": 15, "cy": 10, "intensity": 2}],
+        "growth_flp_per_hour": 12.0,
+        "people_status": "confirmed",
+        "wind_speed": 4.2,
+        "fire_type": "vegetation",
+        "wind_shift": None,
+        "uav_failure": {"round": 3},
+    },
     # 资源不足: 高强度蔓延, 净处置能力为负 → 输出资源缺口, 不给虚假完成时间
     "overwhelmed": {
         "label": "重大火情 · 资源缺口",
@@ -93,7 +109,9 @@ def build_random_scenario(seed: str) -> Dict[str, Any]:
     if rng.random() < 0.45:                                            # 45% 概率发生风变
         shift_round = rng.randint(2, 5)
         wind_series = {str(shift_round): round(min(9.0, wind + 1.5 + rng.random() * 1.8), 1)}
+    # 35% 概率出现执行中单机机电失能(轮次随机; 受害机由当前方案实时选定, 场景不点名单)
+    uav_failure = {"round": rng.randint(2, 5)} if rng.random() < 0.35 else None
     label = f"随机火情 · {intensity} 级 · 风 {wind} m/s · {'有' if people == 'confirmed' else ('无' if people == 'absent' else '待确认')}人"
     return {"label": label, "fire_cells": cells, "growth_flp_per_hour": growth,
             "people_status": people, "wind_speed": wind, "fire_type": "vegetation",
-            "wind_series": wind_series, "random": True}
+            "wind_series": wind_series, "uav_failure": uav_failure, "random": True}

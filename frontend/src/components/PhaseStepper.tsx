@@ -12,7 +12,7 @@ const STAGES = [
 
 const PHASE_STAGE: Record<string, number> = {
   idle: -1, created: 0, searching: 1, analyzing: 2, awaiting_approval: 4,
-  executing: 5, replanning: 5, completed: 6, rejected: 6, error: 6,
+  executing: 5, replanning: 5, recovering: 5, completed: 6, rejected: 6, error: 6,
 }
 
 export default function PhaseStepper({ phase, replans }: PhaseStepperProps) {

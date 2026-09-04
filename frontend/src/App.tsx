@@ -146,7 +146,7 @@ export default function App() {
           )}
           {snapshot?.report && <ReportCard report={snapshot.report} />}
           <FleetPanel fleet={fleet} plan={snapshot?.plan ?? null}
-            ground={!!snapshot && (['executing', 'replanning', 'completed'].includes(phase) ||
+            ground={!!snapshot && (['executing', 'replanning', 'recovering', 'completed'].includes(phase) ||
               (phase === 'awaiting_approval' && (snapshot.rounds?.length ?? 0) > 0))} />
           <ChatPanel taskId={taskId} enabled={llm.connected} />
           <AgentPanel messages={snapshot?.messages ?? []} agents={agents} />
